@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  BUYER
+}
+
+enum AuctionStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  bids              Bid[]
+  buyerAllocations  BuyerAllocation[]
+}
+
+model Seller {
+  id              String   @id @default(cuid())
+  name            String
+  quantity        Decimal  @db.Decimal(12,4)
+  reservePrice    Decimal  @db.Decimal(10,4)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  sellerAllocations SellerAllocation[]
+  buyerAllocations  BuyerAllocation[]
+  supplySnapshots   AuctionSupplySnapshot[]
+}
+
+model Auction {
+  id               String        @id @default(cuid())
+  startTime        DateTime?
+  endTime          DateTime?
+  tickSize         Decimal       @default(0.01) @db.Decimal(10,4)
+  status           AuctionStatus @default(PENDING)
+  clearingPrice    Decimal?      @db.Decimal(10,4)
+  clearingQuantity Decimal?      @db.Decimal(12,4)
+  totalTradeValue  Decimal?      @db.Decimal(15,2)
+  clearingType     String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  
+  bids                  Bid[]
+  sellerAllocations     SellerAllocation[]
+  buyerAllocations      BuyerAllocation[]
+  supplySnapshots       AuctionSupplySnapshot[]
+  demandSnapshots       AuctionDemandSnapshot[]
+  gapSnapshots          AuctionGapSnapshot[]
+}
+
+// Normalized bid structure
+model Bid {
+  id         String   @id @default(cuid())
+  auctionId  String
+  userId     String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  auction    Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  splits     BidSplit[]
+  
+  @@index([auctionId])
+  @@index([userId])
+}
+
+model BidSplit {
+  id        String  @id @default(cuid())
+  bidId     String
+  price     Decimal @db.Decimal(10,4)
+  quantity  Decimal @db.Decimal(12,4)
+  
+  bid       Bid     @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  
+  @@index([bidId])
+  @@index([price])
+}
+
+// Separate allocation tables
+model SellerAllocation {
+  id            String   @id @default(cuid())
+  auctionId     String
+  sellerId      String
+  sellerName    String
+  quantity      Decimal  @db.Decimal(12,4)
+  reservePrice  Decimal  @db.Decimal(10,4)
+  clearingPrice Decimal  @db.Decimal(10,4)
+  tradeValue    Decimal  @db.Decimal(15,2)
+  bonus         Decimal  @db.Decimal(15,2)
+  createdAt     DateTime @default(now())
+  
+  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  seller        Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  
+  @@index([auctionId])
+  @@index([sellerId])
+}
+
+model BuyerAllocation {
+  id            String   @id @default(cuid())
+  auctionId     String
+  buyerId       String
+  buyerName     String
+  sellerId      String
+  sellerName    String
+  quantity      Decimal  @db.Decimal(12,4)
+  bidPrice      Decimal  @db.Decimal(10,4)
+  clearingPrice Decimal  @db.Decimal(10,4)
+  tradeValue    Decimal  @db.Decimal(15,2)
+  createdAt     DateTime @default(now())
+  
+  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  buyer         User     @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  seller        Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  
+  @@index([auctionId])
+  @@index([buyerId])
+  @@index([sellerId])
+}
+
+// Immutable auction snapshots for auditability
+model AuctionSupplySnapshot {
+  id               String   @id @default(cuid())
+  auctionId        String
+  sellerId         String
+  sellerName       String
+  price            Decimal  @db.Decimal(10,4)
+  quantity         Decimal  @db.Decimal(12,4)
+  cumulativeSupply Decimal  @db.Decimal(12,4)
+  
+  auction          Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  seller           Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  
+  @@index([auctionId])
+}
+
+model AuctionDemandSnapshot {
+  id                String   @id @default(cuid())
+  auctionId         String
+  buyerId           String
+  buyerName         String
+  price             Decimal  @db.Decimal(10,4)
+  quantity          Decimal  @db.Decimal(12,4)
+  cumulativeDemand  Decimal  @db.Decimal(12,4)
+  
+  auction           Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  
+  @@index([auctionId])
+}
+
+model AuctionGapSnapshot {
+  id               String   @id @default(cuid())
+  auctionId        String
+  price            Decimal  @db.Decimal(10,4)
+  supply           Decimal  @db.Decimal(12,4)
+  demand           Decimal  @db.Decimal(12,4)
+  gap              Decimal  @db.Decimal(12,4)
+  
+  auction          Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  
+  @@index([auctionId])
+}
