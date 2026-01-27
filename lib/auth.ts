@@ -4,6 +4,16 @@ import { PrismaAdapter } from '@next-auth/prisma-adapter';
 import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 
+if (!process.env.NEXTAUTH_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'Missing NEXTAUTH_SECRET environment variable. Set NEXTAUTH_SECRET in your hosting provider (Netlify/Vercel).' 
+    );
+  } else {
+    console.warn('Warning: NEXTAUTH_SECRET is not set. Using development behavior.');
+  }
+}
+
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
