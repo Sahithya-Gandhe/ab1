@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
       data: {
         status: 'ACTIVE',
         startTime: now,
-        endTime: auction.configuredEnd || new Date(now.getTime() + 60 * 60 * 1000), // 1 hour default
+        endTime: auction.endTime || new Date(now.getTime() + 60 * 60 * 1000), // 1 hour default
       },
     });
 

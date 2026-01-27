@@ -27,11 +27,11 @@ export default function AuctionConfig({ onStatusChange }: AuctionConfigProps) {
   const fetchAuctionConfig = async () => {
     const response = await fetch('/api/auction/config');
     const data = await response.json();
-    if (data.configuredStart) {
-      setStartTime(new Date(data.configuredStart).toISOString().slice(0, 16));
+    if (data.startTime) {
+      setStartTime(new Date(data.startTime).toISOString().slice(0, 16));
     }
-    if (data.configuredEnd) {
-      setEndTime(new Date(data.configuredEnd).toISOString().slice(0, 16));
+    if (data.endTime) {
+      setEndTime(new Date(data.endTime).toISOString().slice(0, 16));
     }
     if (data.tickSize) {
       setTickSize(data.tickSize.toString());

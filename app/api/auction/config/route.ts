@@ -38,8 +38,8 @@ export async function POST(request: NextRequest) {
     const updated = await prisma.auction.update({
       where: { id: auction.id },
       data: {
-        configuredStart: startTime ? new Date(startTime) : null,
-        configuredEnd: endTime ? new Date(endTime) : null,
+        startTime: startTime ? new Date(startTime) : null,
+        endTime: endTime ? new Date(endTime) : null,
         tickSize: tickSize || auction.tickSize,
       },
     });

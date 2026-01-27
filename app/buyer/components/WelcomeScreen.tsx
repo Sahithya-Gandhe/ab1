@@ -11,10 +11,10 @@ export default function WelcomeScreen() {
   }, []);
 
   useEffect(() => {
-    if (auctionData?.configuredStart) {
+    if (auctionData?.startTime) {
       const timer = setInterval(() => {
         const now = new Date().getTime();
-        const start = new Date(auctionData.configuredStart).getTime();
+        const start = new Date(auctionData.startTime).getTime();
         const diff = start - now;
 
         if (diff <= 0) {
