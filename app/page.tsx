@@ -24,7 +24,8 @@ export default function LoginPage() {
       });
 
       if (result?.error) {
-        setError('Invalid email or password');
+        // Surface server-provided error when available
+        setError(result.error || 'Invalid email or password');
         setLoading(false);
         return;
       }
