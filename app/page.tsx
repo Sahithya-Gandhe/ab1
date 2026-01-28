@@ -106,7 +106,7 @@ export default function LoginPage() {
           <p className="text-xs text-black text-center">Demo Credentials:</p>
           <div className="mt-2 space-y-1 text-xs text-black">
             <p className="text-center">Admin: admin@auction.com / admin123</p>
-            <p className="text-center">Buyer: buyer1@auction.com / buyer123</p>
+            <p className="text-center">Buyer: b1@ab.com / b1</p>
           </div>
         </div>
       </div>
