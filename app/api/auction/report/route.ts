@@ -129,12 +129,24 @@ export async function POST(request: NextRequest) {
     doc.text('SECTION 2: SUPPLY CURVE & GAP TABLE', 15, currentY);
     doc.setTextColor(0, 0, 0);
 
-    // Build gap table from gap snapshots
+    // Build gap table from gap snapshots with seller quantities
     const gapTableData: any[] = [];
+    
+    // Create a map of seller info by price
+    const sellerInfoByPrice = new Map<number, { name: string; qty: number }>();
+    sellers.forEach((seller: any) => {
+      const price = Number(seller.reservePrice);
+      sellerInfoByPrice.set(price, { name: seller.name, qty: Number(seller.quantity) });
+    });
     
     if (gapSnapshots && gapSnapshots.length > 0) {
       gapSnapshots.forEach((point: any) => {
+        const price = Number(point.price);
         const gap = Number(point.gap);
+        const supply = Number(point.supply);
+        const demand = Number(point.demand);
+        const sellerInfo = sellerInfoByPrice.get(price);
+        
         let status = 'SHORTAGE';
         if (Math.abs(gap) < 0.0001) {
           status = 'EXACT MATCH';
@@ -142,11 +154,18 @@ export async function POST(request: NextRequest) {
           status = 'SURPLUS';
         }
         
+        // Calculate trade value at this price point (if demand exists)
+        const tradeQty = Math.min(supply, demand);
+        const tradeValue = tradeQty * price * 1000; // MT to Kg
+        
         gapTableData.push([
-          `₹${Number(point.price).toFixed(2)}`,
-          Number(point.supply).toFixed(4),
-          Number(point.demand).toFixed(4),
-          gap.toFixed(4),
+          `₹${price.toFixed(2)}`,
+          sellerInfo?.name || '-',
+          sellerInfo?.qty?.toFixed(2) || '-',
+          supply.toFixed(2),
+          demand.toFixed(2),
+          gap.toFixed(2),
+          `₹${tradeValue.toFixed(2)}`,
           status,
         ]);
       });
@@ -157,7 +176,10 @@ export async function POST(request: NextRequest) {
         cumulativeSupply += Number(seller.quantity);
         gapTableData.push([
           `₹${Number(seller.reservePrice).toFixed(2)}`,
-          cumulativeSupply.toFixed(4),
+          seller.name,
+          Number(seller.quantity).toFixed(2),
+          cumulativeSupply.toFixed(2),
+          '-',
           '-',
           '-',
           '-',
@@ -167,14 +189,14 @@ export async function POST(request: NextRequest) {
 
     autoTable(doc, {
       startY: currentY + 4,
-      head: [['Price', 'Cum. Supply', 'Cum. Demand', 'Gap', 'Status']],
+      head: [['Price', 'Seller', 'Seller Qty', 'Cum. Supply', 'Cum. Demand', 'Gap', 'Trade Value', 'Status']],
       body: gapTableData,
       theme: 'grid',
-      headStyles: { fillColor: [22, 101, 52], textColor: 255, fontSize: 8 },
-      bodyStyles: { fontSize: 8 },
-      styles: { cellPadding: 2 },
+      headStyles: { fillColor: [22, 101, 52], textColor: 255, fontSize: 7 },
+      bodyStyles: { fontSize: 7 },
+      styles: { cellPadding: 1.5 },
       didParseCell: function(data: any) {
-        if (data.section === 'body' && data.column.index === 4) {
+        if (data.section === 'body' && data.column.index === 7) {
           const status = data.cell.text[0];
           if (status === 'EXACT MATCH') {
             data.cell.styles.textColor = [22, 163, 74];
@@ -202,9 +224,9 @@ export async function POST(request: NextRequest) {
       doc.setFont('helvetica', 'bold');
       doc.text('Supply-Demand Curve', 15, currentY);
 
-      const graphX = 25;
-      const graphStartY = currentY + 8;
-      const graphWidth = 160;
+      const graphX = 35;
+      const graphStartY = currentY + 12;
+      const graphWidth = 140;
       const graphHeight = 60;
 
       // Find data ranges
@@ -239,11 +261,37 @@ export async function POST(request: NextRequest) {
         doc.line(graphX, graphStartY, graphX, graphStartY + graphHeight);
         doc.line(graphX, graphStartY + graphHeight, graphX + graphWidth, graphStartY + graphHeight);
 
-        // Axis labels
-        doc.setFontSize(7);
+        // Y-axis labels (Price) with grid lines
+        doc.setFontSize(6);
         doc.setFont('helvetica', 'normal');
-        doc.text('Price (Rs)', graphX - 3, graphStartY - 3);
-        doc.text('Quantity (MT)', graphX + graphWidth / 2, graphStartY + graphHeight + 8, { align: 'center' });
+        const priceStep = priceRange / 5;
+        for (let i = 0; i <= 5; i++) {
+          const price = minPrice + (priceStep * i);
+          const y = scaleY(price);
+          doc.setDrawColor(220, 220, 220);
+          doc.setLineWidth(0.2);
+          doc.line(graphX, y, graphX + graphWidth, y);
+          doc.setDrawColor(0);
+          doc.text(`₹${price.toFixed(2)}`, graphX - 2, y + 1, { align: 'right' });
+        }
+
+        // X-axis labels (Quantity) with grid lines
+        const qtyStep = maxQty / 5;
+        for (let i = 0; i <= 5; i++) {
+          const qty = qtyStep * i;
+          const x = scaleX(qty);
+          doc.setDrawColor(220, 220, 220);
+          doc.setLineWidth(0.2);
+          doc.line(x, graphStartY, x, graphStartY + graphHeight);
+          doc.setDrawColor(0);
+          doc.text(qty.toFixed(0), x, graphStartY + graphHeight + 4, { align: 'center' });
+        }
+
+        // Axis titles
+        doc.setFontSize(7);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Price (₹/Kg)', graphX - 20, graphStartY + graphHeight / 2, { angle: 90 });
+        doc.text('Quantity (MT)', graphX + graphWidth / 2, graphStartY + graphHeight + 10, { align: 'center' });
 
         // Draw Supply curve (green step function)
         const sortedSupply = [...supplySnapshots].sort((a: any, b: any) => Number(a.price) - Number(b.price));
@@ -315,9 +363,10 @@ export async function POST(request: NextRequest) {
         }
 
         // Legend
-        const legendX = graphX + graphWidth - 35;
+        const legendX = graphX + graphWidth + 5;
         const legendY = graphStartY + 5;
         doc.setFontSize(6);
+        doc.setFont('helvetica', 'normal');
         doc.setDrawColor(34, 197, 94);
         doc.setLineWidth(1);
         doc.line(legendX, legendY, legendX + 8, legendY);
@@ -331,7 +380,7 @@ export async function POST(request: NextRequest) {
         doc.circle(legendX + 4, legendY + 10, 1, 'F');
         doc.text('Clearing', legendX + 10, legendY + 11);
 
-        currentY = graphStartY + graphHeight + 10;
+        currentY = graphStartY + graphHeight + 15;
       }
     }
 
@@ -364,41 +413,46 @@ export async function POST(request: NextRequest) {
       const reservePrice = Number(alloc.reservePrice);
       const truthfulness = reservePrice <= clearingPrice ? 'TRUTHFUL' : 'ABOVE CLEARING';
       
+      // Truthful Bid Amount = Quantity × Clearing Price × 1000 (MT to Kg)
+      const truthfulBidAmount = soldQty * clearingPrice * 1000;
+      
       return [
         alloc.sellerName,
-        offeredQty.toFixed(4),
-        soldQty.toFixed(4),
+        offeredQty.toFixed(2),
+        soldQty.toFixed(2),
         percentSold,
         `₹${reservePrice.toFixed(2)}`,
         `₹${clearingPrice.toFixed(2)}`,
         `₹${Number(alloc.tradeValue).toFixed(2)}`,
         `₹${Number(alloc.bonus).toFixed(2)}`,
+        `₹${truthfulBidAmount.toFixed(2)}`,
         truthfulness,
       ];
     });
 
     autoTable(doc, {
       startY: currentY + 4,
-      head: [['Seller', 'Offered Qty', 'Sold Qty', '% Sold', 'Reserve Price', 'Clearing Price', 'Trade Value', 'Bonus', 'Truthfulness']],
+      head: [['Seller', 'Offered', 'Sold', '% Sold', 'Reserve', 'Clearing', 'Trade Value', 'Bonus', 'Truthful Bid', 'Status']],
       body: sellerTableData,
       foot: [[
         'TOTAL',
-        totalSupply.toFixed(4),
-        clearingQuantity.toFixed(4),
+        totalSupply.toFixed(2),
+        clearingQuantity.toFixed(2),
         ((clearingQuantity / totalSupply) * 100).toFixed(1) + '%',
         '',
         '',
         `₹${totalTradeValue.toFixed(2)}`,
         `₹${totalBonus.toFixed(2)}`,
+        `₹${(clearingQuantity * clearingPrice * 1000).toFixed(2)}`,
         '',
       ]],
       theme: 'grid',
-      headStyles: { fillColor: [185, 28, 28], textColor: 255, fontSize: 7 },
-      bodyStyles: { fontSize: 7 },
-      footStyles: { fillColor: [229, 231, 235], textColor: 0, fontStyle: 'bold', fontSize: 7 },
-      styles: { cellPadding: 1.5 },
+      headStyles: { fillColor: [185, 28, 28], textColor: 255, fontSize: 6 },
+      bodyStyles: { fontSize: 6 },
+      footStyles: { fillColor: [229, 231, 235], textColor: 0, fontStyle: 'bold', fontSize: 6 },
+      styles: { cellPadding: 1 },
       didParseCell: function(data: any) {
-        if (data.section === 'body' && data.column.index === 8) {
+        if (data.section === 'body' && data.column.index === 9) {
           const val = data.cell.text[0];
           if (val === 'TRUTHFUL') {
             data.cell.styles.textColor = [22, 163, 74];

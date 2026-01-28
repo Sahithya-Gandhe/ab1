@@ -53,7 +53,7 @@ export default function BiddingScreen({ userId }: BiddingScreenProps) {
     try {
       const [sellersRes, auctionRes, bidRes] = await Promise.all([
         fetch('/api/sellers'),
-        fetch('/api/auction/status'),
+        fetch('/api/auction/config'),
         fetch(`/api/bids/my-bid?userId=${userId}`),
       ]);
 
@@ -182,7 +182,7 @@ export default function BiddingScreen({ userId }: BiddingScreenProps) {
               </label>
               <input
                 type="number"
-                step="0.01"
+                step={auctionData?.tickSize || 0.01}
                 value={price1}
                 onChange={(e) => setPrice1(e.target.value)}
                 onBlur={(e) => handlePriceBlur(e.target.value, setPrice1)}
@@ -215,7 +215,7 @@ export default function BiddingScreen({ userId }: BiddingScreenProps) {
               </label>
               <input
                 type="number"
-                step="0.01"
+                step={auctionData?.tickSize || 0.01}
                 value={price2}
                 onChange={(e) => setPrice2(e.target.value)}
                 onBlur={(e) => handlePriceBlur(e.target.value, setPrice2)}
@@ -246,7 +246,7 @@ export default function BiddingScreen({ userId }: BiddingScreenProps) {
               </label>
               <input
                 type="number"
-                step="0.01"
+                step={auctionData?.tickSize || 0.01}
                 value={price3}
                 onChange={(e) => setPrice3(e.target.value)}
                 onBlur={(e) => handlePriceBlur(e.target.value, setPrice3)}

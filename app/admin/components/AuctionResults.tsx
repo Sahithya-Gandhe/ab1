@@ -112,7 +112,7 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
           <div>
             <p className="text-sm text-black mb-1">Clearing Price</p>
             <p className="text-3xl font-bold text-blue-900">
-              ${results.clearingPrice?.toFixed(2) || '0.00'}
+              ₹{results.clearingPrice?.toFixed(2) || '0.00'}
             </p>
           </div>
           
@@ -126,7 +126,7 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
           <div>
             <p className="text-sm text-black mb-1">Total Trade Value</p>
             <p className="text-3xl font-bold text-green-700">
-              ${results.totalTradeValue?.toFixed(2) || '0.00'}
+              ₹{results.totalTradeValue?.toFixed(2) || '0.00'}
             </p>
           </div>
 
