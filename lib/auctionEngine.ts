@@ -262,7 +262,8 @@ export function calculateRawDemand(bids: BuyerBid[]): DemandPoint[] {
 
 /**
  * CRITICAL EXCEL FUNCTION: Map demand onto seller price grid
- * At each seller price, determine cumulative demand from buyer bids
+ * At each seller price P, sum ALL buyer quantities with bid price >= P
+ * This is a RANGE SUM, not a lookup!
  */
 export function mapDemandToSellerPrices(
   supplyPoints: SupplyPoint[],
@@ -273,26 +274,19 @@ export function mapDemandToSellerPrices(
     return supplyPoints.map(() => 0);
   }
 
-  const minBuyerPrice = rawDemand[rawDemand.length - 1].price;
-  const maxBuyerPrice = rawDemand[0].price;
-  const totalDemand = rawDemand[rawDemand.length - 1].cumulativeQuantity;
-
   return supplyPoints.map(sp => {
-    const sellerPrice = sp.price;
+    const sellerPriceScaled = Math.round(sp.price * DECIMAL_SCALE);
 
-    // Below minimum buyer price → full demand
-    if (sellerPrice <= minBuyerPrice) {
-      return totalDemand;
+    // Sum ALL buyer quantities where bid price >= seller price
+    let demandScaled = 0;
+    for (const dp of rawDemand) {
+      const bidPriceScaled = Math.round(dp.price * DECIMAL_SCALE);
+      if (bidPriceScaled >= sellerPriceScaled) {
+        demandScaled += Math.round(dp.quantity * DECIMAL_SCALE);
+      }
     }
 
-    // Above maximum buyer price → 0
-    if (sellerPrice > maxBuyerPrice) {
-      return 0;
-    }
-
-    // Between min and max → cumulative demand at nearest higher buyer price
-    const nearestHigherDemand = rawDemand.find(dp => sellerPrice <= dp.price);
-    return nearestHigherDemand ? nearestHigherDemand.cumulativeQuantity : 0;
+    return demandScaled / DECIMAL_SCALE;
   });
 }
 
@@ -325,10 +319,9 @@ export function calculateGap(
 // ================== CLEARING PRICE CALCULATION ==================
 
 /**
- * EXCEL EXACT: Calculate clearing price with 3 scenarios
- * CASE 1: Exact match (Gap = 0)
- * CASE 2: Interpolation (Gap changes from negative to positive)
- * CASE 3: No clearing (all gaps negative)
+ * EXCEL EXACT: Calculate clearing price
+ * DISCRETE RULE: Clearing Price = FIRST price where Supply >= Demand
+ * Clearing Quantity = min(Cum Supply, Cum Demand) at that price
  */
 export function calculateClearingPrice(
   gapPoints: GapPoint[]
@@ -337,7 +330,7 @@ export function calculateClearingPrice(
   clearingQuantity: number;
   clearingType: 'EXACT' | 'INTERPOLATED' | 'NO_CLEARING';
 } {
-  // CASE 1: Check for EXACT match (Gap = 0)
+  // CASE 1: Check for EXACT match (Gap = 0) - Supply exactly equals Demand
   for (const point of gapPoints) {
     if (Math.abs(point.gap) < 0.0001) { // Decimal tolerance
       return {
@@ -348,42 +341,25 @@ export function calculateClearingPrice(
     }
   }
 
-  // CASE 2: Check for INTERPOLATED clearing (gap sign change)
-  for (let i = 1; i < gapPoints.length; i++) {
-    const prevGap = gapPoints[i - 1].gap;
-    const currGap = gapPoints[i].gap;
-
-    // Gap changes from negative to positive
-    if (prevGap < 0 && currGap > 0) {
-      // Linear interpolation for BOTH price AND quantity
-      const prevPrice = gapPoints[i - 1].price;
-      const currPrice = gapPoints[i].price;
-      const prevSupply = gapPoints[i - 1].cumulativeSupply;
-      const currSupply = gapPoints[i].cumulativeSupply;
-      
-      const fraction = Math.abs(prevGap) / (Math.abs(prevGap) + currGap);
-      const interpolatedPrice = prevPrice + (currPrice - prevPrice) * fraction;
-      const interpolatedQty = prevSupply + (currSupply - prevSupply) * fraction;
+  // CASE 2: DISCRETE CLEARING - First price where Supply >= Demand (gap >= 0)
+  // This is the Excel rule: clearing occurs at first price point where supply meets/exceeds demand
+  for (let i = 0; i < gapPoints.length; i++) {
+    const point = gapPoints[i];
+    
+    // Gap >= 0 means Supply >= Demand at this price
+    if (point.gap >= 0) {
+      // Clearing quantity = min(supply, demand) at this price
+      const clearingQty = Math.min(point.cumulativeSupply, point.cumulativeDemand);
       
       return {
-        clearingPrice: Math.round(interpolatedPrice * DECIMAL_SCALE) / DECIMAL_SCALE,
-        clearingQuantity: Math.round(interpolatedQty * DECIMAL_SCALE) / DECIMAL_SCALE,
-        clearingType: 'INTERPOLATED',
+        clearingPrice: point.price,
+        clearingQuantity: Math.round(clearingQty * DECIMAL_SCALE) / DECIMAL_SCALE,
+        clearingType: 'INTERPOLATED', // Using 'INTERPOLATED' to indicate discrete clearing
       };
     }
   }
 
-  // CASE 3: NO_CLEARING - verify all gaps are negative
-  const anyPositiveGap = gapPoints.some(g => g.gap > 0);
-  if (!anyPositiveGap) {
-    return {
-      clearingPrice: 0,
-      clearingQuantity: 0,
-      clearingType: 'NO_CLEARING',
-    };
-  }
-
-  // If we reach here, no clearing found (shouldn't happen in valid data)
+  // CASE 3: NO_CLEARING - all gaps are negative (demand > supply at all prices)
   return {
     clearingPrice: 0,
     clearingQuantity: 0,
