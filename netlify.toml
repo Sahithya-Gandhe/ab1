@@ -1,0 +1,7 @@
+[build]
+  command = "npx prisma generate && npm run build"
+  publish = ".next"
+
+[context.production.environment]
+  # Ensure Netlify has these env vars set in the UI: DATABASE_URL, NEXTAUTH_SECRET, NEXTAUTH_URL
+  # You can also set other env vars here if desired.
