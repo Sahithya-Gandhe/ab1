@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { executeAuction, SellerData, BuyerBid } from '@/lib/auctionEngine';
 
+export const dynamic = 'force-dynamic';
+
 // Use 'any' cast to bypass TypeScript cache issues with Prisma client
 const db = prisma as any;
 

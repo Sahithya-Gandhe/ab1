@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+export const dynamic = 'force-dynamic';
+
 // Use 'any' cast to bypass TypeScript cache issues with Prisma client
 const db = prisma as any;
 
