@@ -45,7 +45,7 @@ export default function LiveAuction({ onStatusChange }: LiveAuctionProps) {
       const [sellersRes, bidsRes, auctionRes] = await Promise.all([
         fetch('/api/sellers'),
         fetch('/api/bids'),
-        fetch('/api/auction/status'),
+        fetch('/api/auction/config'),
       ]);
 
       const [sellersData, bidsData, auctionData] = await Promise.all([
@@ -54,15 +54,17 @@ export default function LiveAuction({ onStatusChange }: LiveAuctionProps) {
         auctionRes.json(),
       ]);
 
-      setSellers(sellersData);
-      setBids(bidsData);
+      setSellers(Array.isArray(sellersData) ? sellersData : []);
+      setBids(Array.isArray(bidsData) ? bidsData : []);
       setAuctionData(auctionData);
 
-      if (auctionData.status === 'COMPLETED') {
+      if (auctionData.status === 'COMPLETED' || auctionData.status === 'CLOSED') {
         onStatusChange('COMPLETED');
       }
     } catch (error) {
       console.error('Failed to fetch data:', error);
+      setSellers([]);
+      setBids([]);
     }
   };
 
@@ -115,38 +117,30 @@ export default function LiveAuction({ onStatusChange }: LiveAuctionProps) {
           <table className="min-w-full divide-y divide-gray-200">
             <thead>
               <tr className="table-header">
-                <th className="px-6 py-3">Buyer</th>
-                <th className="px-6 py-3">Price 1</th>
-                <th className="px-6 py-3">Qty 1</th>
-                <th className="px-6 py-3">Price 2</th>
-                <th className="px-6 py-3">Qty 2</th>
-                <th className="px-6 py-3">Price 3</th>
-                <th className="px-6 py-3">Qty 3</th>
+                <th className="px-6 py-3">Type</th>
+                <th className="px-6 py-3">Name</th>
+                <th className="px-6 py-3">Price (₹/kg)</th>
+                <th className="px-6 py-3">Quantity (MT)</th>
                 <th className="px-6 py-3">Time</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {bids.map((bid) => (
                 <tr key={bid.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap font-medium">
-                    {bid.user.name}
-                  </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    ₹{bid.price1.toFixed(2)}
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      bid.type === 'BUYER' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                    }`}>
+                      {bid.type}
+                    </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">{bid.quantity1}</td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {bid.price2 ? `₹${bid.price2.toFixed(2)}` : '-'}
+                  <td className="px-6 py-4 whitespace-nowrap font-medium text-black">
+                    {bid.name}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {bid.quantity2 || '-'}
+                  <td className="px-6 py-4 whitespace-nowrap text-black">
+                    ₹{bid.price.toFixed(2)}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {bid.price3 ? `₹${bid.price3.toFixed(2)}` : '-'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {bid.quantity3 || '-'}
-                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-black">{bid.quantity}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
                     {new Date(bid.createdAt).toLocaleTimeString()}
                   </td>

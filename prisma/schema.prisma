@@ -1,3 +1,10 @@
+// =============================================================================
+// SECOND-PRICE DOUBLE AUCTION SYSTEM - DATABASE SCHEMA
+// =============================================================================
+// Multi-buyer, multi-seller auction with Excel-exact market clearing logic
+// Implements: Cumulative supply/demand, gap analysis, second-price incentives
+// =============================================================================
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,174 +14,314 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  ADMIN
-  BUYER
+// =============================================================================
+// 1️⃣ AUCTION - Stores auction instance state
+// =============================================================================
+model Auction {
+  id                 String   @id @default(cuid())
+  status             AuctionStatus @default(DRAFT)
+  
+  // Clearing results
+  clearingPrice      Decimal?  @db.Decimal(12, 4)
+  clearingQuantityMt Decimal?  @db.Decimal(12, 4)
+  tradeValue         Decimal?  @db.Decimal(18, 4)
+  
+  // Supply/Demand totals
+  totalSupplyMt      Decimal?  @db.Decimal(12, 4)
+  totalDemandMt      Decimal?  @db.Decimal(12, 4)
+  unsoldSupplyMt     Decimal?  @db.Decimal(12, 4)
+  
+  // Re-auction tracking
+  reauctionCount     Int       @default(0)
+  parentAuctionId    String?
+  parentAuction      Auction?  @relation("ReAuction", fields: [parentAuctionId], references: [id])
+  childAuctions      Auction[] @relation("ReAuction")
+  
+  // Configuration
+  tickSize           Decimal   @default(0.01) @db.Decimal(8, 4)
+  clearingType       String?   // EXACT | INTERPOLATED | NO_CLEARING
+  
+  // Timestamps
+  createdAt          DateTime  @default(now())
+  startTime          DateTime?
+  endTime            DateTime?
+  closedAt           DateTime?
+  
+  // Relations
+  buyerBids          BuyerBid[]
+  sellerBids         SellerBid[]
+  allocations        Allocation[]
+  auctionResults     AuctionResult[]
+  supplySnapshots    AuctionSupplySnapshot[]
+  demandSnapshots    AuctionDemandSnapshot[]
+  gapSnapshots       AuctionGapSnapshot[]
+  
+  @@map("auctions")
 }
 
 enum AuctionStatus {
+  DRAFT
   PENDING
   ACTIVE
+  CLOSED
   COMPLETED
+  REAUCTION
+  CANCELLED
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String
-  name      String
-  role      Role
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// =============================================================================
+// 2️⃣ BUYER - Represents buyer entities
+// =============================================================================
+model Buyer {
+  id           String   @id @default(cuid())
+  buyerName    String
+  organization String?
+  creditLimit  Decimal? @db.Decimal(18, 4)
+  email        String   @unique
+  password     String
+  createdAt    DateTime @default(now())
   
-  bids              Bid[]
-  buyerAllocations  BuyerAllocation[]
+  // Relations
+  bids         BuyerBid[]
+  allocations  Allocation[]
+  
+  @@map("buyers")
 }
 
+// =============================================================================
+// 3️⃣ SELLER - Represents seller entities
+// =============================================================================
 model Seller {
-  id              String   @id @default(cuid())
-  name            String
-  quantity        Decimal  @db.Decimal(12,4)
-  reservePrice    Decimal  @db.Decimal(10,4)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id               String   @id @default(cuid())
+  sellerName       String
+  location         String?
+  distanceKm       Decimal? @db.Decimal(10, 2)
   
-  sellerAllocations SellerAllocation[]
-  buyerAllocations  BuyerAllocation[]
-  supplySnapshots   AuctionSupplySnapshot[]
+  // Default offer values (used when creating auction)
+  basePricePerKg   Decimal? @db.Decimal(10, 4)  // Base offer price
+  offerQuantityMt  Decimal? @db.Decimal(12, 4)  // Total quantity offered
+  
+  createdAt        DateTime @default(now())
+  
+  // Relations
+  bids         SellerBid[]
+  allocations  Allocation[]
+  
+  @@map("sellers")
 }
 
-model Auction {
-  id               String        @id @default(cuid())
-  startTime        DateTime?
-  endTime          DateTime?
-  tickSize         Decimal       @default(0.01) @db.Decimal(10,4)
-  status           AuctionStatus @default(PENDING)
-  clearingPrice    Decimal?      @db.Decimal(10,4)
-  clearingQuantity Decimal?      @db.Decimal(12,4)
-  totalTradeValue  Decimal?      @db.Decimal(15,2)
-  clearingType     String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+// =============================================================================
+// 4️⃣ BUYER_BIDS - Multiple price-quantity bids per buyer per auction
+// =============================================================================
+// Rules:
+// - Buyers may submit multiple bids for different distance slabs
+// - Each distance slab can have up to 3 price-quantity bids
+// - Sorted by price DESC for clearing
+// - Cumulative demand calculated bottom → top
+// - When buyer quantities end, cumulative demand repeats upward
+// =============================================================================
+model BuyerBid {
+  id                  String   @id @default(cuid())
+  auctionId           String
+  auction             Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  buyerId             String
+  buyer               Buyer    @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   
-  bids                  Bid[]
-  sellerAllocations     SellerAllocation[]
-  buyerAllocations      BuyerAllocation[]
-  supplySnapshots       AuctionSupplySnapshot[]
-  demandSnapshots       AuctionDemandSnapshot[]
-  gapSnapshots          AuctionGapSnapshot[]
-}
-
-// Normalized bid structure
-model Bid {
-  id         String   @id @default(cuid())
-  auctionId  String
-  userId     String
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  // Distance slab info - which slab this bid applies to
+  distanceSlabId      String?  // Reference to which distance slab
+  distanceSlabMin     Decimal? @db.Decimal(10, 2) // e.g., 0 km
+  distanceSlabMax     Decimal? @db.Decimal(10, 2) // e.g., 100 km
   
-  auction    Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bidPricePerKg       Decimal  @db.Decimal(10, 4)
+  bidQuantityMt       Decimal  @db.Decimal(12, 4)
+  cumulativeDemandMt  Decimal? @db.Decimal(12, 4) // Calculated during clearing
   
-  splits     BidSplit[]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
   
   @@index([auctionId])
-  @@index([userId])
+  @@index([buyerId])
+  @@index([auctionId, bidPricePerKg(sort: Desc)])
+  @@index([auctionId, distanceSlabMin])
+  @@map("buyer_bids")
 }
 
-model BidSplit {
-  id        String  @id @default(cuid())
-  bidId     String
-  price     Decimal @db.Decimal(10,4)
-  quantity  Decimal @db.Decimal(12,4)
+// =============================================================================
+// 5️⃣ SELLER_BIDS - Multiple supply slabs per seller per auction
+// =============================================================================
+// Rules:
+// - Sellers may submit multiple price-quantity slabs
+// - Sorted by offer price ASC
+// - Cumulative supply calculated top → bottom
+// - landed_cost = offer_price + delivery_cost
+// =============================================================================
+model SellerBid {
+  id                  String   @id @default(cuid())
+  auctionId           String
+  auction             Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  sellerId            String
+  seller              Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   
-  bid       Bid     @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  offerPricePerKg     Decimal  @db.Decimal(10, 4)
+  offerQuantityMt     Decimal  @db.Decimal(12, 4)
+  distanceKm          Decimal? @db.Decimal(10, 2)
+  deliveryCostPerKg   Decimal? @db.Decimal(10, 4)
+  landedCostPerKg     Decimal? @db.Decimal(10, 4) // offer_price + delivery_cost
+  cumulativeSupplyMt  Decimal? @db.Decimal(12, 4) // Calculated during clearing
   
-  @@index([bidId])
-  @@index([price])
-}
-
-// Separate allocation tables
-model SellerAllocation {
-  id            String   @id @default(cuid())
-  auctionId     String
-  sellerId      String
-  sellerName    String
-  quantity      Decimal  @db.Decimal(12,4)
-  reservePrice  Decimal  @db.Decimal(10,4)
-  clearingPrice Decimal  @db.Decimal(10,4)
-  tradeValue    Decimal  @db.Decimal(15,2)
-  bonus         Decimal  @db.Decimal(15,2)
-  createdAt     DateTime @default(now())
-  
-  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  seller        Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
   
   @@index([auctionId])
   @@index([sellerId])
+  @@index([auctionId, offerPricePerKg(sort: Asc)])
+  @@map("seller_bids")
 }
 
-model BuyerAllocation {
-  id            String   @id @default(cuid())
-  auctionId     String
-  buyerId       String
-  buyerName     String
-  sellerId      String
-  sellerName    String
-  quantity      Decimal  @db.Decimal(12,4)
-  bidPrice      Decimal  @db.Decimal(10,4)
-  clearingPrice Decimal  @db.Decimal(10,4)
-  tradeValue    Decimal  @db.Decimal(15,2)
-  createdAt     DateTime @default(now())
+// =============================================================================
+// 6️⃣ DISTANCE_SLABS - Fixed delivery pricing
+// =============================================================================
+model DistanceSlab {
+  id          String   @id @default(cuid())
+  minKm       Decimal  @db.Decimal(10, 2)
+  maxKm       Decimal  @db.Decimal(10, 2)
+  costPerKg   Decimal  @db.Decimal(10, 4)
+  createdAt   DateTime @default(now())
   
-  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  buyer         User     @relation(fields: [buyerId], references: [id], onDelete: Cascade)
-  seller        Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  @@map("distance_slabs")
+}
+
+// =============================================================================
+// 7️⃣ ALLOCATIONS - Final auction result mapping buyers to sellers
+// =============================================================================
+model Allocation {
+  id                  String   @id @default(cuid())
+  auctionId           String
+  auction             Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  buyerId             String
+  buyer               Buyer    @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId            String
+  seller              Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  
+  allocatedQuantityMt Decimal  @db.Decimal(12, 4)
+  finalPricePerKg     Decimal  @db.Decimal(10, 4) // Clearing price (second-price)
+  
+  // Additional details for audit
+  buyerBidPrice       Decimal? @db.Decimal(10, 4)
+  sellerOfferPrice    Decimal? @db.Decimal(10, 4)
+  sellerLandedCost    Decimal? @db.Decimal(10, 4)
+  tradeValue          Decimal? @db.Decimal(18, 4)
+  buyerSavings        Decimal? @db.Decimal(18, 4) // bid_price - clearing_price
+  sellerBonus         Decimal? @db.Decimal(18, 4) // clearing_price - offer_price
+  
+  createdAt           DateTime @default(now())
   
   @@index([auctionId])
   @@index([buyerId])
   @@index([sellerId])
+  @@map("allocations")
 }
 
-// Immutable auction snapshots for auditability
-model AuctionSupplySnapshot {
-  id               String   @id @default(cuid())
-  auctionId        String
-  sellerId         String
-  sellerName       String
-  price            Decimal  @db.Decimal(10,4)
-  quantity         Decimal  @db.Decimal(12,4)
-  cumulativeSupply Decimal  @db.Decimal(12,4)
+// =============================================================================
+// 8️⃣ AUCTION_RESULTS - Immutable result snapshot for audit/PDF
+// =============================================================================
+model AuctionResult {
+  id                  String   @id @default(cuid())
+  auctionId           String
+  auction             Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   
-  auction          Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  seller           Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  clearingPrice       Decimal  @db.Decimal(12, 4)
+  clearingQuantityMt  Decimal  @db.Decimal(12, 4)
+  tradeValue          Decimal  @db.Decimal(18, 4)
+  clearingType        String   // EXACT | INTERPOLATED | NO_CLEARING
+  
+  // Full result snapshot
+  resultJson          Json
+  pdfUrl              String?
+  
+  // Supply/Demand metrics
+  totalSupplyMt       Decimal? @db.Decimal(12, 4)
+  totalDemandMt       Decimal? @db.Decimal(12, 4)
+  unsoldSupplyMt      Decimal? @db.Decimal(12, 4)
+  unsoldDemandMt      Decimal? @db.Decimal(12, 4)
+  
+  // Participation metrics
+  participatingBuyers Int?
+  participatingSellers Int?
+  
+  generatedAt         DateTime @default(now())
   
   @@index([auctionId])
+  @@map("auction_results")
+}
+
+// =============================================================================
+// AUDIT SNAPSHOTS - Supply, Demand, Gap snapshots for Excel matching
+// =============================================================================
+
+model AuctionSupplySnapshot {
+  id                String   @id @default(cuid())
+  auctionId         String
+  auction           Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  
+  sellerId          String
+  sellerName        String
+  price             Decimal  @db.Decimal(10, 4)
+  quantity          Decimal  @db.Decimal(12, 4)
+  cumulativeSupply  Decimal  @db.Decimal(12, 4)
+  landedCost        Decimal? @db.Decimal(10, 4)
+  deliveryCost      Decimal? @db.Decimal(10, 4)
+  
+  @@index([auctionId])
+  @@map("auction_supply_snapshots")
 }
 
 model AuctionDemandSnapshot {
   id                String   @id @default(cuid())
   auctionId         String
-  buyerId           String
-  buyerName         String
-  price             Decimal  @db.Decimal(10,4)
-  quantity          Decimal  @db.Decimal(12,4)
-  cumulativeDemand  Decimal  @db.Decimal(12,4)
-  
   auction           Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   
+  buyerId           String
+  buyerName         String
+  price             Decimal  @db.Decimal(10, 4)
+  quantity          Decimal  @db.Decimal(12, 4)
+  cumulativeDemand  Decimal  @db.Decimal(12, 4)
+  
   @@index([auctionId])
+  @@map("auction_demand_snapshots")
 }
 
 model AuctionGapSnapshot {
-  id               String   @id @default(cuid())
-  auctionId        String
-  price            Decimal  @db.Decimal(10,4)
-  supply           Decimal  @db.Decimal(12,4)
-  demand           Decimal  @db.Decimal(12,4)
-  gap              Decimal  @db.Decimal(12,4)
+  id                String   @id @default(cuid())
+  auctionId         String
+  auction           Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   
-  auction          Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  rowIndex          Int
+  price             Decimal  @db.Decimal(10, 4)
+  supply            Decimal  @db.Decimal(12, 4)
+  demand            Decimal  @db.Decimal(12, 4)
+  gap               Decimal  @db.Decimal(12, 4)
   
   @@index([auctionId])
+  @@map("auction_gap_snapshots")
+}
+
+// =============================================================================
+// USER - Authentication (kept for backward compatibility)
+// =============================================================================
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      UserRole @default(BUYER)
+  createdAt DateTime @default(now())
+  
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  BUYER
+  SELLER
 }

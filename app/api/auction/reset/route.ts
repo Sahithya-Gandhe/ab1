@@ -16,16 +16,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No auction found' }, { status: 404 });
     }
 
-    // Delete all bids (cascades to BidSplit)
-    await db.bid.deleteMany({
+    // Delete buyer bids
+    await db.buyerBid.deleteMany({
       where: { auctionId: auction.id },
     });
 
-    // Delete allocations from new tables
-    await db.sellerAllocation.deleteMany({
-      where: { auctionId: auction.id },
-    });
-    await db.buyerAllocation.deleteMany({
+    // Delete allocations
+    await db.allocation.deleteMany({
       where: { auctionId: auction.id },
     });
 
@@ -40,23 +37,27 @@ export async function POST(request: NextRequest) {
       where: { auctionId: auction.id },
     });
 
-    // Reset auction
+    // Reset auction status but keep seller bids
     await db.auction.update({
       where: { id: auction.id },
       data: {
         status: 'PENDING',
         startTime: null,
         endTime: null,
+        closedAt: null,
         clearingPrice: null,
-        clearingQuantity: null,
-        totalTradeValue: null,
+        clearingQuantityMt: null,
+        tradeValue: null,
+        totalSupplyMt: null,
+        totalDemandMt: null,
+        unsoldSupplyMt: null,
         clearingType: null,
       },
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, message: 'Auction reset successfully' });
   } catch (error) {
     console.error('Error resetting auction:', error);
-    return NextResponse.json({ error: 'Failed to reset auction' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to reset auction', details: String(error) }, { status: 500 });
   }
 }

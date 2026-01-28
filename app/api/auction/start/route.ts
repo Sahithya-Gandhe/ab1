@@ -5,21 +5,26 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   try {
-    const auction = await prisma.auction.findFirst({
-      where: { status: 'PENDING' },
+    const auction = await (prisma as any).auction.findFirst({
+      where: { 
+        OR: [
+          { status: 'PENDING' },
+          { status: 'DRAFT' }
+        ]
+      },
       orderBy: { createdAt: 'desc' },
     });
 
     if (!auction) {
       return NextResponse.json(
-        { error: 'No pending auction found. Please create an auction first.' },
+        { error: 'No pending or draft auction found. Please create an auction first.' },
         { status: 404 }
       );
     }
 
     const now = new Date();
     
-    const updated = await prisma.auction.update({
+    const updated = await (prisma as any).auction.update({
       where: { id: auction.id },
       data: {
         status: 'ACTIVE',

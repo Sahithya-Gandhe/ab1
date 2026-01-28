@@ -3,20 +3,28 @@ import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
+interface BidInput {
+  distanceSlabId?: string;
+  distanceSlabMin?: number;
+  distanceSlabMax?: number;
+  price: number;
+  quantity: number;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { userId, price1, quantity1, price2, quantity2, price3, quantity3 } = body;
+    const { userId, bids, price1, quantity1, price2, quantity2, price3, quantity3 } = body;
 
-    if (!userId || !price1 || !quantity1) {
+    if (!userId) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Missing user ID' },
         { status: 400 }
       );
     }
 
     // Get active auction
-    const auction = await prisma.auction.findFirst({
+    const auction = await (prisma as any).auction.findFirst({
       where: { status: 'ACTIVE' },
       orderBy: { createdAt: 'desc' },
     });
@@ -31,89 +39,112 @@ export async function POST(request: NextRequest) {
     // Cast to any to bypass TypeScript cache issues with Prisma client
     const db = prisma as any;
 
-    // Check if user already has a bid
-    const existingBid = await db.bid.findFirst({
+    // Find user first to get email
+    const user = await db.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'User not found' },
+        { status: 404 }
+      );
+    }
+
+    // Find buyer by email
+    const buyer = await db.buyer.findUnique({
+      where: { email: user.email },
+    });
+
+    if (!buyer) {
+      return NextResponse.json(
+        { error: 'Buyer not found' },
+        { status: 404 }
+      );
+    }
+
+    // Delete all existing bids for this buyer in this auction
+    await db.buyerBid.deleteMany({
       where: {
         auctionId: auction.id,
-        userId,
-      },
-      include: {
-        splits: true,
+        buyerId: buyer.id,
       },
     });
 
-    if (existingBid) {
-      // Delete existing splits
-      await db.bidSplit.deleteMany({
-        where: { bidId: existingBid.id },
-      });
+    // Prepare bids array
+    let bidsToCreate: any[] = [];
 
-      // Create new splits
-      const splitsData = [];
-      if (price1 && quantity1) {
-        splitsData.push({ bidId: existingBid.id, price: price1, quantity: quantity1 });
-      }
-      if (price2 && quantity2) {
-        splitsData.push({ bidId: existingBid.id, price: price2, quantity: quantity2 });
-      }
-      if (price3 && quantity3) {
-        splitsData.push({ bidId: existingBid.id, price: price3, quantity: quantity3 });
-      }
-
-      await db.bidSplit.createMany({
-        data: splitsData,
-      });
-
-      // Return updated bid with splits
-      const updated = await db.bid.findUnique({
-        where: { id: existingBid.id },
-        include: { splits: true },
-      });
-
-      // Transform for frontend
-      return NextResponse.json({
-        ...updated,
-        price1: updated.splits[0]?.price ? Number(updated.splits[0].price) : null,
-        quantity1: updated.splits[0]?.quantity ? Number(updated.splits[0].quantity) : null,
-        price2: updated.splits[1]?.price ? Number(updated.splits[1].price) : null,
-        quantity2: updated.splits[1]?.quantity ? Number(updated.splits[1].quantity) : null,
-        price3: updated.splits[2]?.price ? Number(updated.splits[2].price) : null,
-        quantity3: updated.splits[2]?.quantity ? Number(updated.splits[2].quantity) : null,
-      });
-    } else {
-      // Create new bid with splits
-      const bid = await db.bid.create({
-        data: {
+    // Handle new format (array of bids with distance slabs)
+    if (bids && Array.isArray(bids)) {
+      bidsToCreate = bids
+        .filter((bid: BidInput) => bid.price && bid.quantity && bid.quantity > 0)
+        .map((bid: BidInput) => ({
           auctionId: auction.id,
-          userId,
-          splits: {
-            create: [
-              ...(price1 && quantity1 ? [{ price: price1, quantity: quantity1 }] : []),
-              ...(price2 && quantity2 ? [{ price: price2, quantity: quantity2 }] : []),
-              ...(price3 && quantity3 ? [{ price: price3, quantity: quantity3 }] : []),
-            ],
-          },
-        },
-        include: {
-          splits: true,
-        },
+          buyerId: buyer.id,
+          bidPricePerKg: bid.price,
+          bidQuantityMt: bid.quantity,
+          distanceSlabId: bid.distanceSlabId || null,
+          distanceSlabMin: bid.distanceSlabMin ?? null,
+          distanceSlabMax: bid.distanceSlabMax ?? null,
+        }));
+    }
+    // Handle legacy format (price1/quantity1, price2/quantity2, price3/quantity3)
+    else if (price1 && quantity1) {
+      bidsToCreate.push({
+        auctionId: auction.id,
+        buyerId: buyer.id,
+        bidPricePerKg: parseFloat(price1),
+        bidQuantityMt: parseFloat(quantity1),
       });
 
-      // Transform for frontend
-      return NextResponse.json({
-        ...bid,
-        price1: bid.splits[0]?.price ? Number(bid.splits[0].price) : null,
-        quantity1: bid.splits[0]?.quantity ? Number(bid.splits[0].quantity) : null,
-        price2: bid.splits[1]?.price ? Number(bid.splits[1].price) : null,
-        quantity2: bid.splits[1]?.quantity ? Number(bid.splits[1].quantity) : null,
-        price3: bid.splits[2]?.price ? Number(bid.splits[2].price) : null,
-        quantity3: bid.splits[2]?.quantity ? Number(bid.splits[2].quantity) : null,
-      });
+      if (price2 && quantity2) {
+        bidsToCreate.push({
+          auctionId: auction.id,
+          buyerId: buyer.id,
+          bidPricePerKg: parseFloat(price2),
+          bidQuantityMt: parseFloat(quantity2),
+        });
+      }
+
+      if (price3 && quantity3) {
+        bidsToCreate.push({
+          auctionId: auction.id,
+          buyerId: buyer.id,
+          bidPricePerKg: parseFloat(price3),
+          bidQuantityMt: parseFloat(quantity3),
+        });
+      }
     }
+
+    if (bidsToCreate.length === 0) {
+      return NextResponse.json(
+        { error: 'At least one valid bid is required' },
+        { status: 400 }
+      );
+    }
+
+    // Create all bids
+    const createdBids = await Promise.all(
+      bidsToCreate.map(bidData => db.buyerBid.create({ data: bidData }))
+    );
+
+    // Return response with all created bids
+    return NextResponse.json({
+      success: true,
+      bidsCount: createdBids.length,
+      bids: createdBids.map((bid: any) => ({
+        id: bid.id,
+        price: Number(bid.bidPricePerKg),
+        quantity: Number(bid.bidQuantityMt),
+        distanceSlabId: bid.distanceSlabId,
+        distanceSlabMin: bid.distanceSlabMin ? Number(bid.distanceSlabMin) : null,
+        distanceSlabMax: bid.distanceSlabMax ? Number(bid.distanceSlabMax) : null,
+      })),
+    });
   } catch (error) {
     console.error('Error submitting bid:', error);
     return NextResponse.json(
-      { error: 'Failed to submit bid' },
+      { error: 'Failed to submit bid', details: String(error) },
       { status: 500 }
     );
   }

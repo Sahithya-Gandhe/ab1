@@ -29,20 +29,34 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
 
   const handleDownloadPDF = async () => {
     try {
+      if (!results?.auctionId) {
+        alert('Auction ID not found');
+        return;
+      }
+
       const response = await fetch('/api/auction/report', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ auctionId: results.auctionId }),
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
       
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `auction-report-${new Date().toISOString()}.pdf`;
+      a.download = `auction-report-${results.auctionId}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     } catch (error) {
+      console.error('PDF generation error:', error);
       alert('Failed to generate PDF report');
     }
   };

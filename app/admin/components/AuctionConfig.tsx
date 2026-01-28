@@ -19,9 +19,15 @@ export default function AuctionConfig({ onStatusChange }: AuctionConfigProps) {
   }, []);
 
   const fetchSellers = async () => {
-    const response = await fetch('/api/sellers');
-    const data = await response.json();
-    setSellers(data);
+    try {
+      const response = await fetch('/api/sellers');
+      const data = await response.json();
+      console.log('Sellers data:', data);
+      setSellers(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Failed to fetch sellers:', error);
+      setSellers([]);
+    }
   };
 
   const fetchAuctionConfig = async () => {
@@ -155,23 +161,33 @@ export default function AuctionConfig({ onStatusChange }: AuctionConfigProps) {
       <div className="auction-card">
         <h2 className="text-xl font-bold text-black mb-4">Registered Sellers</h2>
         
+        {sellers.length === 0 && (
+          <div className="text-gray-500 mb-4">Loading sellers data...</div>
+        )}
+        
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead>
               <tr className="table-header">
                 <th className="px-6 py-3">Seller Name</th>
-                <th className="px-6 py-3">Quantity</th>
-                <th className="px-6 py-3">Reserve Price</th>
+                <th className="px-6 py-3">Location</th>
+                <th className="px-6 py-3">Distance (km)</th>
+                <th className="px-6 py-3">Quantity (MT)</th>
+                <th className="px-6 py-3">Avg Price (₹/kg)</th>
+                <th className="px-6 py-3">Bids</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {sellers.map((seller) => (
                 <tr key={seller.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap text-black">{seller.name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-black">{Number(seller.quantity)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-black">{seller.location}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-black">{seller.distanceKm}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-black">{seller.quantity}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-black">
                     ₹{Number(seller.reservePrice).toFixed(2)}
                   </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-black">{seller.bidsCount}</td>
                 </tr>
               ))}
             </tbody>

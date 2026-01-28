@@ -84,7 +84,7 @@ export default function WelcomeScreen() {
           </li>
           <li className="flex items-start">
             <span className="text-blue-600 font-bold mr-2">2.</span>
-            <span>View available seller supply and their reserve prices</span>
+            <span>View available seller supply quantities (prices are hidden)</span>
           </li>
           <li className="flex items-start">
             <span className="text-blue-600 font-bold mr-2">3.</span>

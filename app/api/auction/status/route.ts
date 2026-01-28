@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const auction = await prisma.auction.findFirst({
+    const auction = await (prisma as any).auction.findFirst({
       orderBy: { createdAt: 'desc' },
     });
 

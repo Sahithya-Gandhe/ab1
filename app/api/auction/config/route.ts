@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const auction = await prisma.auction.findFirst({
+    const auction = await (prisma as any).auction.findFirst({
       orderBy: { createdAt: 'desc' },
     });
 
@@ -20,9 +20,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { startTime, endTime, tickSize } = body;
 
-    const auction = await prisma.auction.findFirst({
+    const auction = await (prisma as any).auction.findFirst({
       where: {
         OR: [
+          { status: 'DRAFT' },
           { status: 'PENDING' },
           { status: 'ACTIVE' }
         ]
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const updated = await prisma.auction.update({
+    const updated = await (prisma as any).auction.update({
       where: { id: auction.id },
       data: {
         startTime: startTime ? new Date(startTime) : null,

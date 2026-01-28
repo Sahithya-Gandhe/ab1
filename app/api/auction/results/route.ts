@@ -17,18 +17,60 @@ export async function GET() {
       return NextResponse.json({ error: 'No completed auction found' }, { status: 404 });
     }
 
-    // Fetch seller allocations
-    const sellerAllocations = await db.sellerAllocation.findMany({
+    // Fetch all allocations
+    const allocations = await db.allocation.findMany({
       where: { auctionId: auction.id },
-      include: { seller: true },
-      orderBy: { reservePrice: 'asc' },
+      include: { 
+        buyer: true,
+        seller: true,
+      },
+      orderBy: { finalPricePerKg: 'asc' },
     });
 
-    // Fetch buyer allocations
-    const buyerAllocations = await db.buyerAllocation.findMany({
-      where: { auctionId: auction.id },
-      include: { buyer: true, seller: true },
-    });
+    // Group allocations by seller for summary
+    const sellerAllocMap = new Map<string, any>();
+    const buyerAllocMap = new Map<string, any>();
+    
+    for (const alloc of allocations) {
+      // Seller summary
+      const sellerId = alloc.seller.id;
+      if (!sellerAllocMap.has(sellerId)) {
+        sellerAllocMap.set(sellerId, {
+          id: sellerId,
+          sellerName: alloc.seller.sellerName,
+          location: alloc.seller.location,
+          totalQuantity: 0,
+          tradeValue: 0,
+        });
+      }
+      const sellerData = sellerAllocMap.get(sellerId);
+      sellerData.totalQuantity += Number(alloc.allocatedQuantityMt);
+      sellerData.tradeValue += Number(alloc.tradeValue || 0);
+      
+      // Buyer summary
+      const buyerId = alloc.buyer.id;
+      if (!buyerAllocMap.has(buyerId)) {
+        buyerAllocMap.set(buyerId, {
+          id: buyerId,
+          buyerName: alloc.buyer.buyerName,
+          organization: alloc.buyer.organization,
+          totalQuantity: 0,
+          tradeValue: 0,
+          allocations: [],
+        });
+      }
+      const buyerData = buyerAllocMap.get(buyerId);
+      buyerData.totalQuantity += Number(alloc.allocatedQuantityMt);
+      buyerData.tradeValue += Number(alloc.tradeValue || 0);
+      buyerData.allocations.push({
+        sellerName: alloc.seller.sellerName,
+        quantity: Number(alloc.allocatedQuantityMt),
+        price: Number(alloc.finalPricePerKg),
+      });
+    }
+    
+    const sellerAllocations = Array.from(sellerAllocMap.values());
+    const buyerAllocations = Array.from(buyerAllocMap.values());
 
     // Fetch supply snapshots
     const supplySnapshots = await db.auctionSupplySnapshot.findMany({
@@ -48,73 +90,44 @@ export async function GET() {
       orderBy: { price: 'asc' },
     });
 
-    // Convert to API response format
-    const allocations = sellerAllocations.map((a: any) => ({
-      sellerId: a.sellerId,
-      sellerName: a.sellerName,
-      quantity: Number(a.quantity),
-      reservePrice: Number(a.reservePrice),
-      clearingPrice: Number(a.clearingPrice),
-      tradeValue: Number(a.tradeValue),
-      bonus: Number(a.bonus),
-    }));
-
+    // Convert snapshots to API response format
     const supplyPoints = supplySnapshots.map((s: any) => ({
       sellerId: s.sellerId,
       sellerName: s.sellerName,
       price: Number(s.price),
       quantity: Number(s.quantity),
       cumulativeQuantity: Number(s.cumulativeSupply),
+      landedCost: Number(s.landedCost || s.price),
+      deliveryCost: Number(s.deliveryCost || 0),
     }));
 
     const demandPoints = demandSnapshots.map((d: any) => ({
-      userId: d.buyerId,
-      userName: d.buyerName,
+      buyerId: d.buyerId,
+      buyerName: d.buyerName,
       price: Number(d.price),
       quantity: Number(d.quantity),
       cumulativeQuantity: Number(d.cumulativeDemand),
     }));
 
     const gapPoints = gapSnapshots.map((g: any, index: number) => ({
-      index,
+      index: g.rowIndex ?? index,
       price: Number(g.price),
       cumulativeSupply: Number(g.supply),
       cumulativeDemand: Number(g.demand),
       gap: Number(g.gap),
     }));
 
-    // Group buyer allocations by buyer
-    const buyerAllocMap = new Map<string, any>();
-    for (const ba of buyerAllocations) {
-      if (!buyerAllocMap.has(ba.buyerId)) {
-        buyerAllocMap.set(ba.buyerId, {
-          userId: ba.buyerId,
-          userName: ba.buyerName,
-          totalQuantity: 0,
-          allocations: [],
-        });
-      }
-      const buyer = buyerAllocMap.get(ba.buyerId);
-      buyer.totalQuantity += Number(ba.quantity);
-      buyer.allocations.push({
-        sellerId: ba.sellerId,
-        sellerName: ba.sellerName,
-        quantity: Number(ba.quantity),
-        price: Number(ba.clearingPrice),
-      });
-    }
-
     return NextResponse.json({
       clearingPrice: Number(auction.clearingPrice),
-      clearingQuantity: Number(auction.clearingQuantity),
-      totalTradeValue: Number(auction.totalTradeValue),
+      clearingQuantity: Number(auction.clearingQuantityMt),
+      totalTradeValue: Number(auction.tradeValue),
       clearingType: auction.clearingType || 'EXACT',
       auctionId: auction.id,
       startTime: auction.startTime,
       endTime: auction.endTime,
       tickSize: Number(auction.tickSize),
-      allocations,
-      buyerAllocations: Array.from(buyerAllocMap.values()),
+      sellerAllocations,
+      buyerAllocations,
       supplyPoints,
       demandPoints,
       gapPoints,

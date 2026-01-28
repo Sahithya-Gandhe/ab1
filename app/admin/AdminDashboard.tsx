@@ -7,7 +7,7 @@ import AuctionConfig from './components/AuctionConfig';
 import LiveAuction from './components/LiveAuction';
 import AuctionResults from './components/AuctionResults';
 
-type AuctionStatus = 'NONE' | 'PENDING' | 'ACTIVE' | 'COMPLETED';
+type AuctionStatus = 'NONE' | 'DRAFT' | 'PENDING' | 'ACTIVE' | 'CLOSED' | 'COMPLETED' | 'REAUCTION' | 'CANCELLED';
 
 export default function AdminDashboard() {
   const [auctionStatus, setAuctionStatus] = useState<AuctionStatus>('NONE');
@@ -21,12 +21,21 @@ export default function AdminDashboard() {
 
   const fetchAuctionStatus = async () => {
     try {
-      const response = await fetch('/api/auction/status');
+      const response = await fetch('/api/auction/status', {
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      
       const data = await response.json();
-      setAuctionStatus(data.status);
-      setLoading(false);
+      setAuctionStatus(data.status || 'NONE');
     } catch (error) {
       console.error('Failed to fetch auction status:', error);
+      // Don't change status on error - keep current state
+    } finally {
       setLoading(false);
     }
   };
@@ -68,7 +77,7 @@ export default function AdminDashboard() {
           <CreateAuction onAuctionCreated={fetchAuctionStatus} />
         )}
         
-        {auctionStatus === 'PENDING' && (
+        {(auctionStatus === 'DRAFT' || auctionStatus === 'PENDING') && (
           <AuctionConfig onStatusChange={setAuctionStatus} />
         )}
         
@@ -76,7 +85,7 @@ export default function AdminDashboard() {
           <LiveAuction onStatusChange={setAuctionStatus} />
         )}
         
-        {auctionStatus === 'COMPLETED' && (
+        {(auctionStatus === 'COMPLETED' || auctionStatus === 'CLOSED') && (
           <AuctionResults onReset={() => setAuctionStatus('PENDING')} />
         )}
       </main>
