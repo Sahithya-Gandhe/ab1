@@ -75,30 +75,77 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
     );
   }
 
-  // Prepare chart data
-  const chartData: any[] = [];
+  // Prepare chart data - Supply and Demand as step functions
+  // Supply: quantity on X-axis, price on Y-axis (ascending by price)
+  // Demand: cumulative quantity on X-axis, price on Y-axis (descending by price)
   
-  // Add supply curve points
-  if (results.supplyPoints) {
-    results.supplyPoints.forEach((point: any) => {
-      chartData.push({
-        quantity: point.cumulativeQuantity,
-        supply: point.price,
-        type: 'supply'
-      });
+  const supplyChartData: { quantity: number; price: number }[] = [];
+  const demandChartData: { quantity: number; price: number }[] = [];
+  
+  // Build supply curve data (step function: cumulative qty vs price)
+  if (results.supplyPoints && results.supplyPoints.length > 0) {
+    // Start at origin
+    supplyChartData.push({ quantity: 0, price: results.supplyPoints[0].price });
+    
+    results.supplyPoints.forEach((point: any, index: number) => {
+      // Horizontal line to current cumulative quantity
+      supplyChartData.push({ quantity: point.cumulativeQuantity, price: point.price });
+      // Vertical step up to next price (if exists)
+      if (index < results.supplyPoints.length - 1) {
+        supplyChartData.push({ 
+          quantity: point.cumulativeQuantity, 
+          price: results.supplyPoints[index + 1].price 
+        });
+      }
     });
   }
 
-  // Add demand curve points
-  if (results.demandPoints) {
-    results.demandPoints.forEach((point: any) => {
-      chartData.push({
-        quantity: point.cumulativeQuantity,
-        demand: point.price,
-        type: 'demand'
-      });
+  // Build demand curve data (step function: cumulative qty vs price, descending)
+  if (results.demandPoints && results.demandPoints.length > 0) {
+    // Sort demand by price descending for proper curve
+    const sortedDemand = [...results.demandPoints].sort((a: any, b: any) => b.price - a.price);
+    
+    // Start at origin (0 qty, highest price)
+    demandChartData.push({ quantity: 0, price: sortedDemand[0].price });
+    
+    sortedDemand.forEach((point: any, index: number) => {
+      // Horizontal line to current cumulative quantity  
+      demandChartData.push({ quantity: point.cumulativeQuantity, price: point.price });
+      // Vertical step down to next price (if exists)
+      if (index < sortedDemand.length - 1) {
+        demandChartData.push({ 
+          quantity: point.cumulativeQuantity, 
+          price: sortedDemand[index + 1].price 
+        });
+      }
     });
   }
+
+  // Combine for recharts - need to merge both curves
+  // Create combined dataset with both supply and demand values
+  const allQuantities = new Set<number>();
+  supplyChartData.forEach(d => allQuantities.add(d.quantity));
+  demandChartData.forEach(d => allQuantities.add(d.quantity));
+  
+  const sortedQuantities = Array.from(allQuantities).sort((a, b) => a - b);
+  
+  const chartData = sortedQuantities.map(qty => {
+    // Find supply price at this quantity (last point with quantity <= qty)
+    const supplyPoint = supplyChartData
+      .filter(p => p.quantity <= qty)
+      .sort((a, b) => b.quantity - a.quantity)[0];
+    
+    // Find demand price at this quantity
+    const demandPoint = demandChartData
+      .filter(p => p.quantity <= qty)
+      .sort((a, b) => b.quantity - a.quantity)[0];
+    
+    return {
+      quantity: qty,
+      supply: supplyPoint?.price,
+      demand: demandPoint?.price,
+    };
+  });
 
   return (
     <div className="space-y-6">

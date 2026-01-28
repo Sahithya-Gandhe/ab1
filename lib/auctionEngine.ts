@@ -275,13 +275,12 @@ export function mapDemandToSellerPrices(
   }
 
   return supplyPoints.map(sp => {
-    const sellerPriceScaled = Math.round(sp.price * DECIMAL_SCALE);
+    let demandScaled = 0;
 
     // Sum ALL buyer quantities where bid price >= seller price
-    let demandScaled = 0;
+    // Use small tolerance (1e-9) for floating point edge cases
     for (const dp of rawDemand) {
-      const bidPriceScaled = Math.round(dp.price * DECIMAL_SCALE);
-      if (bidPriceScaled >= sellerPriceScaled) {
+      if (dp.price + 1e-9 >= sp.price) {
         demandScaled += Math.round(dp.quantity * DECIMAL_SCALE);
       }
     }
@@ -319,9 +318,15 @@ export function calculateGap(
 // ================== CLEARING PRICE CALCULATION ==================
 
 /**
- * EXCEL EXACT: Calculate clearing price
- * DISCRETE RULE: Clearing Price = FIRST price where Supply >= Demand
- * Clearing Quantity = min(Cum Supply, Cum Demand) at that price
+ * EXCEL EXACT: Calculate clearing price using gap-based logic
+ * - EXACT: Gap = 0 at a seller price point
+ * - INTERPOLATED: Gap changes from negative to positive between two points
+ * - NO_CLEARING: All gaps negative (demand > supply everywhere)
+ * 
+ * Interpolation formula (when gap sign changes):
+ *   fraction = |Gap[i-1]| / (|Gap[i-1]| + Gap[i])
+ *   ClearingPrice = Price[i-1] + (Price[i] - Price[i-1]) × fraction
+ *   ClearingQty = Supply[i-1] + (Supply[i] - Supply[i-1]) × fraction
  */
 export function calculateClearingPrice(
   gapPoints: GapPoint[]
@@ -342,25 +347,47 @@ export function calculateClearingPrice(
     }
   }
 
-  // CASE 2: DISCRETE CLEARING - First price where Supply >= Demand (gap >= 0)
-  // This is the Excel rule: clearing occurs at first price point where supply meets/exceeds demand
-  for (let i = 0; i < gapPoints.length; i++) {
-    const point = gapPoints[i];
-    
-    // Gap >= 0 means Supply >= Demand at this price
-    if (point.gap >= 0) {
-      // Clearing quantity = min(supply, demand) at this price
-      const clearingQty = Math.min(point.cumulativeSupply, point.cumulativeDemand);
-      
+  // CASE 2: INTERPOLATION - Gap changes from negative to positive
+  // Find where shortage (gap < 0) becomes surplus (gap > 0)
+  for (let i = 1; i < gapPoints.length; i++) {
+    const prev = gapPoints[i - 1];
+    const curr = gapPoints[i];
+
+    // Gap changes sign from negative (shortage) to positive (surplus)
+    if (prev.gap < 0 && curr.gap > 0) {
+      // Interpolation fraction = |prevGap| / (|prevGap| + currGap)
+      const absGapPrev = Math.abs(prev.gap);
+      const absGapCurr = curr.gap;
+      const fraction = absGapPrev / (absGapPrev + absGapCurr);
+
+      // Interpolate price
+      const interpolatedPrice = prev.price + (curr.price - prev.price) * fraction;
+
+      // Interpolate quantity (clearing qty = interpolated supply position)
+      const interpolatedQty = prev.cumulativeSupply + (curr.cumulativeSupply - prev.cumulativeSupply) * fraction;
+
       return {
-        clearingPrice: point.price,
-        clearingQuantity: Math.round(clearingQty * DECIMAL_SCALE) / DECIMAL_SCALE,
-        clearingType: 'INTERPOLATED', // Using 'INTERPOLATED' to indicate discrete clearing
+        clearingPrice: Math.round(interpolatedPrice * DECIMAL_SCALE) / DECIMAL_SCALE,
+        clearingQuantity: Math.round(interpolatedQty * DECIMAL_SCALE) / DECIMAL_SCALE,
+        clearingType: 'INTERPOLATED',
       };
     }
   }
 
-  // CASE 3: NO_CLEARING - all gaps are negative (demand > supply at all prices)
+  // CASE 3: First gap is already positive (supply exceeds demand from start)
+  // Clear at first price point where gap >= 0
+  for (const point of gapPoints) {
+    if (point.gap >= 0) {
+      const clearingQty = Math.min(point.cumulativeSupply, point.cumulativeDemand);
+      return {
+        clearingPrice: point.price,
+        clearingQuantity: Math.round(clearingQty * DECIMAL_SCALE) / DECIMAL_SCALE,
+        clearingType: 'EXACT',
+      };
+    }
+  }
+
+  // CASE 4: NO_CLEARING - all gaps are negative (demand > supply at all prices)
   return {
     clearingPrice: 0,
     clearingQuantity: 0,
