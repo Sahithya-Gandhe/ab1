@@ -409,12 +409,12 @@ export async function POST(request: NextRequest) {
       const soldQty = Number(alloc.quantity);
       const percentSold = offeredQty > 0 ? ((soldQty / offeredQty) * 100).toFixed(1) + '%' : '0%';
       
-      // Truthfulness: Compare reserve price to clearing price
+      // Status: Check if reserve price is at or below clearing price
       const reservePrice = Number(alloc.reservePrice);
-      const truthfulness = reservePrice <= clearingPrice ? 'TRUTHFUL' : 'ABOVE CLEARING';
+      const status = reservePrice <= clearingPrice ? 'ACCEPTED' : 'ABOVE CLEARING';
       
-      // Truthful Bid Amount = Quantity × Clearing Price × 1000 (MT to Kg)
-      const truthfulBidAmount = soldQty * clearingPrice * 1000;
+      // Trade Value at Clearing Price = Quantity × Clearing Price × 1000 (MT to Kg)
+      const tradeAtClearing = soldQty * clearingPrice * 1000;
       
       return [
         alloc.sellerName,
@@ -425,14 +425,14 @@ export async function POST(request: NextRequest) {
         `₹${clearingPrice.toFixed(2)}`,
         `₹${Number(alloc.tradeValue).toFixed(2)}`,
         `₹${Number(alloc.bonus).toFixed(2)}`,
-        `₹${truthfulBidAmount.toFixed(2)}`,
-        truthfulness,
+        `₹${tradeAtClearing.toFixed(2)}`,
+        status,
       ];
     });
 
     autoTable(doc, {
       startY: currentY + 4,
-      head: [['Seller', 'Offered', 'Sold', '% Sold', 'Reserve', 'Clearing', 'Trade Value', 'Bonus', 'Truthful Bid', 'Status']],
+      head: [['Seller', 'Offered', 'Sold', '% Sold', 'Reserve', 'Clearing', 'Trade Value', 'Bonus', 'Trade @ Clearing', 'Status']],
       body: sellerTableData,
       foot: [[
         'TOTAL',
@@ -454,7 +454,7 @@ export async function POST(request: NextRequest) {
       didParseCell: function(data: any) {
         if (data.section === 'body' && data.column.index === 9) {
           const val = data.cell.text[0];
-          if (val === 'TRUTHFUL') {
+          if (val === 'ACCEPTED') {
             data.cell.styles.textColor = [22, 163, 74];
             data.cell.styles.fontStyle = 'bold';
           } else {
@@ -481,7 +481,8 @@ export async function POST(request: NextRequest) {
     doc.setTextColor(0, 0, 0);
 
     // Create detailed buyer-seller allocation rows
-    const buyerMatrixData: any[] = [];
+    // AGGREGATE: Merge duplicate buyer+seller combinations
+    const buyerSellerAggregated = new Map<string, { buyerName: string; sellerName: string; quantity: number }>();
     
     // Group by buyer for summary info
     const buyerTotals = new Map<string, { name: string; totalQty: number; totalValue: number }>();
@@ -490,6 +491,7 @@ export async function POST(request: NextRequest) {
       const qty = Number(ba.quantity);
       const value = qty * clearingPrice * 1000; // MT to Kg
       
+      // Aggregate buyer totals
       if (!buyerTotals.has(ba.buyerId)) {
         buyerTotals.set(ba.buyerId, { name: ba.buyerName, totalQty: 0, totalValue: 0 });
       }
@@ -497,10 +499,28 @@ export async function POST(request: NextRequest) {
       bt.totalQty += qty;
       bt.totalValue += value;
       
+      // Aggregate buyer-seller pairs (remove duplicates)
+      const key = `${ba.buyerId}__${ba.sellerId}`;
+      if (buyerSellerAggregated.has(key)) {
+        const existing = buyerSellerAggregated.get(key)!;
+        existing.quantity += qty;
+      } else {
+        buyerSellerAggregated.set(key, {
+          buyerName: ba.buyerName,
+          sellerName: ba.sellerName,
+          quantity: qty,
+        });
+      }
+    });
+    
+    // Build aggregated matrix data (no duplicates)
+    const buyerMatrixData: any[] = [];
+    buyerSellerAggregated.forEach((agg) => {
+      const value = agg.quantity * clearingPrice * 1000;
       buyerMatrixData.push([
-        ba.buyerName,
-        ba.sellerName,
-        qty.toFixed(4),
+        agg.buyerName,
+        agg.sellerName,
+        agg.quantity.toFixed(4),
         `₹${clearingPrice.toFixed(2)}`,
         `₹${value.toFixed(2)}`,
       ]);

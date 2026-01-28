@@ -263,7 +263,7 @@ export function calculateRawDemand(bids: BuyerBid[]): DemandPoint[] {
 /**
  * CRITICAL EXCEL FUNCTION: Map demand onto seller price grid
  * At each seller price P, sum ALL buyer quantities with bid price >= P
- * This is a RANGE SUM, not a lookup!
+ * This creates a STEP-DOWN demand curve (decreasing as price increases)
  */
 export function mapDemandToSellerPrices(
   supplyPoints: SupplyPoint[],
@@ -278,9 +278,9 @@ export function mapDemandToSellerPrices(
     let demandScaled = 0;
 
     // Sum ALL buyer quantities where bid price >= seller price
-    // Use small tolerance (1e-9) for floating point edge cases
+    // This is the EXCEL SUMIF logic: =SUMIF(BidPrices, ">=" & SellerPrice, BidQuantities)
     for (const dp of rawDemand) {
-      if (dp.price + 1e-9 >= sp.price) {
+      if (dp.price >= sp.price) {
         demandScaled += Math.round(dp.quantity * DECIMAL_SCALE);
       }
     }
