@@ -331,8 +331,9 @@ export function calculateClearingPrice(
   clearingType: 'EXACT' | 'INTERPOLATED' | 'NO_CLEARING';
 } {
   // CASE 1: Check for EXACT match (Gap = 0) - Supply exactly equals Demand
+  // Use scaled integers to avoid float comparison errors
   for (const point of gapPoints) {
-    if (Math.abs(point.gap) < 0.0001) { // Decimal tolerance
+    if (Math.round(point.gap * DECIMAL_SCALE) === 0) {
       return {
         clearingPrice: point.price,
         clearingQuantity: point.cumulativeSupply,
@@ -383,7 +384,8 @@ export function calculateSellerAllocations(
   
   for (const sp of supplyPoints) {
     // Only sellers at or below clearing price participate
-    if (Math.round(sp.price * DECIMAL_SCALE) > Math.round(clearingPrice * DECIMAL_SCALE)) break;
+    // Use tolerance for safety with interpolated prices
+    if (sp.price > clearingPrice + 1e-6) continue;
 
     const sellerQtyScaled = Math.round(sp.quantity * DECIMAL_SCALE);
     const allocatedQtyScaled = Math.min(remainingQuantityScaled, sellerQtyScaled);
@@ -430,13 +432,27 @@ export function calculateBuyerAllocations(
 ): BuyerAllocationResult[] {
   // Filter accepted bids (price >= clearingPrice) and sort by price DESC
   // CRITICAL: Each demand point is treated independently, even for same buyer
+  // PRICE-TIME PRIORITY: Higher price first, then smaller quantity (proxy for earlier submission)
   const acceptedBids = rawDemand
-    .filter(dp => dp.price >= clearingPrice - 0.0001)
+    .filter(dp => {
+      const bidPriceScaled = Math.round(dp.price * DECIMAL_SCALE);
+      const clearingPriceScaled = Math.round(clearingPrice * DECIMAL_SCALE);
+      return bidPriceScaled >= clearingPriceScaled;
+    })
     .sort((a, b) => {
-      // Sort by price DESC, then by userId for deterministic ordering
-      if (Math.abs(a.price - b.price) > 0.0001) {
-        return b.price - a.price;
+      // Sort by price DESC (higher price gets priority)
+      const priceA = Math.round(a.price * DECIMAL_SCALE);
+      const priceB = Math.round(b.price * DECIMAL_SCALE);
+      if (priceB !== priceA) {
+        return priceB - priceA;
       }
+      // Same price: smaller quantity first (proxy for time priority - smaller bids submitted first)
+      const qtyA = Math.round(a.quantity * DECIMAL_SCALE);
+      const qtyB = Math.round(b.quantity * DECIMAL_SCALE);
+      if (qtyA !== qtyB) {
+        return qtyA - qtyB;
+      }
+      // Final tiebreaker: userId for deterministic ordering
       return a.userId.localeCompare(b.userId);
     });
 
