@@ -26,10 +26,15 @@ interface SellerBidRecord {
   sellerId: string;
   offerPricePerKg: any;
   offerQuantityMt: any;
-  distanceKm: any;
-  deliveryCostPerKg: any;
-  landedCostPerKg: any;
   seller: { sellerName: string };
+}
+
+interface BuyerSellerDistanceRecord {
+  id: string;
+  buyerId: string;
+  sellerId: string;
+  distanceKm: any;
+  costPerKg: any;
 }
 
 interface BuyerBidRecord {
@@ -76,6 +81,17 @@ export async function POST(request: NextRequest) {
       include: { buyer: true },
     }) as BuyerBidRecord[];
 
+    // Fetch buyer-seller distances (pre-computed Haversine distances)
+    const buyerSellerDistances = await (prisma as any).buyerSellerDistance.findMany({
+      where: { auctionId: auction.id },
+    }) as BuyerSellerDistanceRecord[];
+
+    // Create distance lookup map for O(1) access
+    const distanceMap = new Map<string, BuyerSellerDistanceRecord>();
+    buyerSellerDistances.forEach(d => {
+      distanceMap.set(`${d.buyerId}_${d.sellerId}`, d);
+    });
+
     // Fetch distance slabs for delivery cost calculation
     const distanceSlabs = await (prisma as any).distanceSlab.findMany() as DistanceSlabRecord[];
     const slabData: DistanceSlabData[] = distanceSlabs.map((s: DistanceSlabRecord) => ({
@@ -84,16 +100,16 @@ export async function POST(request: NextRequest) {
       costPerKg: Number(s.costPerKg),
     }));
 
-    // Prepare seller bids with delivery costs
+    // Prepare seller bids (distance is buyer-specific, not stored here)
     const preparedSellerBids: SellerBidData[] = sellerBids.map((bid: SellerBidRecord) => ({
       id: bid.id,
       sellerId: bid.sellerId,
       sellerName: bid.seller.sellerName,
       offerPricePerKg: Number(bid.offerPricePerKg),
       offerQuantityMt: Number(bid.offerQuantityMt),
-      distanceKm: Number(bid.distanceKm || 0),
-      deliveryCostPerKg: Number(bid.deliveryCostPerKg || 0),
-      landedCostPerKg: Number(bid.landedCostPerKg || bid.offerPricePerKg),
+      distanceKm: 0, // Not used in clearing (price-only)
+      deliveryCostPerKg: 0, // Not used in clearing
+      landedCostPerKg: Number(bid.offerPricePerKg), // Base price only
     }));
 
     // Prepare buyer bids
@@ -134,18 +150,23 @@ export async function POST(request: NextRequest) {
       where: { auctionId: auction.id },
     });
 
-    // Save allocations
+    // Save allocations with buyer-specific landing costs
     for (const alloc of results.allocations) {
+      // Get buyer-specific distance and delivery cost
+      const distance = distanceMap.get(`${alloc.buyerId}_${alloc.sellerId}`);
+      const deliveryCost = distance ? Number(distance.costPerKg) : 0;
+      const buyerLandedCost = alloc.finalPricePerKg + deliveryCost;
+
       await (prisma as any).allocation.create({
         data: {
           auctionId: auction.id,
           buyerId: alloc.buyerId,
           sellerId: alloc.sellerId,
           allocatedQuantityMt: alloc.allocatedQuantityMt,
-          finalPricePerKg: alloc.finalPricePerKg,
+          finalPricePerKg: alloc.finalPricePerKg, // Clearing price (what buyer pays seller)
           buyerBidPrice: alloc.buyerBidPrice,
           sellerOfferPrice: alloc.sellerOfferPrice,
-          sellerLandedCost: alloc.sellerLandedCost,
+          sellerLandedCost: buyerLandedCost, // Rename misleading: this is buyer's total cost
           tradeValue: alloc.tradeValue,
           buyerSavings: alloc.buyerSavings,
           sellerBonus: alloc.sellerBonus,
@@ -170,7 +191,7 @@ export async function POST(request: NextRequest) {
 
     // Delete existing snapshots
     await (prisma as any).auctionSupplySnapshot.deleteMany({ where: { auctionId: auction.id } });
-    await (prisma as any).auctionDemandSnapshot.deleteMany({ where: { auctionId: auction.id } });
+    await (prisma as any).marketDemand.deleteMany({ where: { auctionId: auction.id } });
     await (prisma as any).auctionGapSnapshot.deleteMany({ where: { auctionId: auction.id } });
 
     // Save supply snapshots
@@ -189,16 +210,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Save demand snapshots
-    for (const dp of results.demandPoints) {
-      await (prisma as any).auctionDemandSnapshot.create({
+    // Save MARKET demand (price-aggregated, used for clearing)
+    for (const md of results.marketDemand) {
+      await (prisma as any).marketDemand.create({
         data: {
           auctionId: auction.id,
-          buyerId: dp.buyerId,
-          buyerName: dp.buyerName,
-          price: dp.bidPrice,
-          quantity: dp.quantity,
-          cumulativeDemand: dp.cumulativeDemand,
+          pricePerKg: md.pricePerKg,
+          totalDemandMt: md.totalDemandMt,
+          cumulativeDemandMt: md.cumulativeDemandMt,
         },
       });
     }
@@ -217,42 +236,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Create auction result record (immutable audit trail)
-    await (prisma as any).auctionResult.create({
-      data: {
-        auctionId: auction.id,
-        clearingPrice: results.clearingPrice,
-        clearingQuantityMt: results.clearingQuantityMt,
-        tradeValue: results.totalTradeValue,
-        clearingType: results.clearingType,
-        totalSupplyMt: results.totalSupplyMt,
-        totalDemandMt: results.totalDemandMt,
-        unsoldSupplyMt: results.unsoldSupplyMt,
-        unsoldDemandMt: results.unsoldDemandMt,
-        participatingBuyers: results.eligibleBuyerCount,
-        participatingSellers: results.eligibleSellerCount,
-        resultJson: {
-          clearingPrice: results.clearingPrice,
-          clearingQuantityMt: results.clearingQuantityMt,
-          clearingType: results.clearingType,
-          totalTradeValue: results.totalTradeValue,
-          totalSupplyMt: results.totalSupplyMt,
-          totalDemandMt: results.totalDemandMt,
-          unsoldSupplyMt: results.unsoldSupplyMt,
-          unsoldDemandMt: results.unsoldDemandMt,
-          allocations: results.allocations,
-          supplyPoints: results.supplyPoints,
-          demandPoints: results.demandPoints,
-          gapPoints: results.gapPoints,
-          shouldReauction: results.shouldReauction,
-          reauctionReason: results.reauctionReason,
-        },
-      },
-    });
-
-    // Handle re-auction if needed
+    // Handle re-auction if more than 70% supply unsold
     let reauctionId = null;
-    if (results.shouldReauction) {
+    const unsoldPercent = results.totalSupplyMt > 0 
+      ? (results.unsoldSupplyMt / results.totalSupplyMt) * 100 
+      : 0;
+    const shouldReauction = unsoldPercent > 70;
+    
+    if (shouldReauction) {
       const leftovers = getLeftoverQuantities(results.supplyPoints, results.allocations);
       
       // Create new re-auction
@@ -267,20 +258,28 @@ export async function POST(request: NextRequest) {
 
       reauctionId = reauction.id;
 
-      // Carry forward leftover seller bids
+      // Carry forward leftover seller bids (distance is buyer-relative, not copied)
       for (const leftover of leftovers) {
-        // Find original bid to get distance info
-        const originalBid = sellerBids.find((b: SellerBidRecord) => b.sellerId === leftover.sellerId);
-        
         await (prisma as any).sellerBid.create({
           data: {
             auctionId: reauction.id,
             sellerId: leftover.sellerId,
             offerPricePerKg: leftover.offerPrice,
             offerQuantityMt: leftover.leftoverQuantity,
-            distanceKm: originalBid?.distanceKm || 0,
-            deliveryCostPerKg: originalBid?.deliveryCostPerKg || 0,
-            landedCostPerKg: originalBid?.landedCostPerKg || leftover.offerPrice,
+          },
+        });
+      }
+
+      // Copy buyer-seller distances to re-auction
+      for (const dist of buyerSellerDistances) {
+        await (prisma as any).buyerSellerDistance.create({
+          data: {
+            auctionId: reauction.id,
+            buyerId: dist.buyerId,
+            sellerId: dist.sellerId,
+            distanceKm: dist.distanceKm,
+            slabId: (dist as any).slabId,
+            costPerKg: dist.costPerKg,
           },
         });
       }
@@ -307,8 +306,9 @@ export async function POST(request: NextRequest) {
         eligibleBuyerCount: results.eligibleBuyerCount,
         eligibleSellerCount: results.eligibleSellerCount,
         allocationsCount: results.allocations.length,
-        shouldReauction: results.shouldReauction,
-        reauctionReason: results.reauctionReason,
+        unsoldPercent: unsoldPercent,
+        shouldReauction: shouldReauction,
+        reauctionReason: shouldReauction ? `${unsoldPercent.toFixed(1)}% of supply unsold (threshold: 70%)` : null,
         reauctionId,
       },
     });

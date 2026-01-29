@@ -108,7 +108,7 @@ export default function BiddingScreen({ userId }: BiddingScreenProps) {
     
     bids.forEach(bid => {
       const slabIndex = DISTANCE_SLABS.findIndex(
-        s => s.min === Number(bid.distanceSlabMin) && s.max === Number(bid.distanceSlabMax)
+        s => s.id === bid.distanceSlabId
       );
       if (slabIndex >= 0) {
         if (!bidsBySlabIndex[slabIndex]) bidsBySlabIndex[slabIndex] = [];
@@ -236,8 +236,6 @@ export default function BiddingScreen({ userId }: BiddingScreenProps) {
       // Collect all valid bids
       const allBids: {
         distanceSlabId: string;
-        distanceSlabMin: number;
-        distanceSlabMax: number;
         price: number;
         quantity: number;
       }[] = [];
@@ -247,8 +245,6 @@ export default function BiddingScreen({ userId }: BiddingScreenProps) {
           if (bid.price && bid.quantity && parseFloat(bid.quantity) > 0) {
             allBids.push({
               distanceSlabId: slabBid.slab.id,
-              distanceSlabMin: slabBid.slab.min,
-              distanceSlabMax: slabBid.slab.max,
               price: parseFloat(bid.price),
               quantity: parseFloat(bid.quantity),
             });

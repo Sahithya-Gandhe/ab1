@@ -47,6 +47,9 @@ export async function GET(request: NextRequest) {
         auctionId: auction.id,
         buyerId: buyer.id,
       },
+      include: {
+        distanceSlab: true,
+      },
       orderBy: {
         bidPricePerKg: 'desc', // Sort by price descending
       },
@@ -62,8 +65,8 @@ export async function GET(request: NextRequest) {
       price: Number(bid.bidPricePerKg),
       quantity: Number(bid.bidQuantityMt),
       distanceSlabId: bid.distanceSlabId,
-      distanceSlabMin: bid.distanceSlabMin ? Number(bid.distanceSlabMin) : null,
-      distanceSlabMax: bid.distanceSlabMax ? Number(bid.distanceSlabMax) : null,
+      distanceSlabMin: bid.distanceSlab ? Number(bid.distanceSlab.minKm) : null,
+      distanceSlabMax: bid.distanceSlab ? Number(bid.distanceSlab.maxKm) : null,
       createdAt: bid.createdAt,
     }));
 

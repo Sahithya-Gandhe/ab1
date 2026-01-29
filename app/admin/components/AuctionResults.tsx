@@ -17,7 +17,7 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
 
   const fetchResults = async () => {
     try {
-      const response = await fetch('/api/auction/results');
+      const response = await fetch('/api/auction/results-new');
       const data = await response.json();
       setResults(data);
       setLoading(false);
@@ -29,7 +29,7 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
 
   const handleDownloadPDF = async () => {
     try {
-      if (!results?.auctionId) {
+      if (!results?.auction?.id) {
         alert('Auction ID not found');
         return;
       }
@@ -39,7 +39,7 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ auctionId: results.auctionId }),
+        body: JSON.stringify({ auctionId: results.auction.id }),
       });
 
       if (!response.ok) {
@@ -173,28 +173,28 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
           <div>
             <p className="text-sm text-black mb-1">Clearing Price</p>
             <p className="text-3xl font-bold text-blue-900">
-              ₹{results.clearingPrice?.toFixed(2) || '0.00'}
+              ₹{results.summary?.clearingPrice?.toFixed(2) || '0.00'}
             </p>
           </div>
           
           <div>
             <p className="text-sm text-black mb-1">Clearing Quantity</p>
             <p className="text-3xl font-bold text-blue-900">
-              {results.clearingQuantity?.toFixed(2) || '0'} units
+              {results.summary?.clearingQuantityMt?.toFixed(2) || '0'} units
             </p>
           </div>
           
           <div>
             <p className="text-sm text-black mb-1">Total Trade Value</p>
             <p className="text-3xl font-bold text-green-700">
-              ₹{results.totalTradeValue?.toFixed(2) || '0.00'}
+              ₹{results.summary?.totalTradeValue?.toFixed(2) || '0.00'}
             </p>
           </div>
 
           <div>
             <p className="text-sm text-black mb-1">Clearing Type</p>
             <p className="text-lg font-bold text-purple-700">
-              {results.clearingType || 'EXACT'}
+              {results.summary?.clearingType || 'EXACT'}
             </p>
           </div>
         </div>
@@ -227,7 +227,7 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {results.gapPoints.map((point: any, index: number) => (
+                {results.gapPoints?.map((point: any, index: number) => (
                   <tr 
                     key={index}
                     className={`
@@ -237,19 +237,19 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
                     `}
                   >
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
-                      ₹{point.price.toFixed(2)}
+                      ₹{point.price?.toFixed(2) || '0.00'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-black">
-                      {point.cumulativeSupply.toFixed(2)}
+                      {point.cumulativeSupply?.toFixed(2) || '0.00'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-black">
-                      {point.cumulativeDemand.toFixed(2)}
+                      {point.cumulativeDemand?.toFixed(2) || '0.00'}
                     </td>
                     <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${
                       point.gap === 0 ? 'text-green-700' :
                       point.gap < 0 ? 'text-red-700' : 'text-blue-700'
                     }`}>
-                      {point.gap.toFixed(2)}
+                      {point.gap?.toFixed(2) || '0.00'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-xs text-center">
                       {point.gap === 0 && <span className="px-2 py-1 bg-green-100 text-green-800 rounded">EXACT</span>}
@@ -339,25 +339,25 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {results.allocations?.map((alloc: any, idx: number) => (
+              {results.sellerAllocations?.map((alloc: any, idx: number) => (
                 <tr key={idx} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap font-medium text-black">
                     {alloc.sellerName}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-black">
-                    {alloc.quantity.toFixed(2)}
+                    {alloc.totalQuantity?.toFixed(2) || '0.00'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-black">
-                    ₹{alloc.reservePrice.toFixed(2)}
+                    ₹{(alloc.allocations?.[0]?.price || 0).toFixed(2)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-black">
-                    ₹{alloc.clearingPrice.toFixed(2)}
+                    ₹{results.summary?.clearingPrice?.toFixed(2) || '0.00'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap font-semibold text-green-700">
-                    ₹{alloc.tradeValue.toFixed(2)}
+                    ₹{alloc.totalValue?.toFixed(2) || '0.00'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-blue-700">
-                    ₹{alloc.bonus.toFixed(2)}
+                    ₹{alloc.totalBonus?.toFixed(2) || '0.00'}
                   </td>
                 </tr>
               ))}
@@ -366,10 +366,10 @@ export default function AuctionResults({ onReset }: AuctionResultsProps) {
               <tr className="bg-gray-100 font-bold">
                 <td className="px-6 py-4 text-black" colSpan={4}>TOTAL</td>
                 <td className="px-6 py-4 text-green-700">
-                  ₹{results.totalTradeValue?.toFixed(2) || '0.00'}
+                  ₹{results.summary?.totalTradeValue?.toFixed(2) || '0.00'}
                 </td>
                 <td className="px-6 py-4 text-blue-700">
-                  ₹{results.allocations?.reduce((sum: number, a: any) => sum + a.bonus, 0).toFixed(2)}
+                  ₹{(results.sellerAllocations?.reduce((sum: number, a: any) => sum + (a.totalBonus || 0), 0) || 0).toFixed(2)}
                 </td>
               </tr>
             </tfoot>

@@ -18,7 +18,7 @@ export default function ResultsScreen({ userId }: ResultsScreenProps) {
   const fetchResults = async () => {
     try {
       const [resultsRes, bidRes] = await Promise.all([
-        fetch('/api/auction/results'),
+        fetch('/api/auction/results-new'),
         fetch(`/api/bids/my-bid?userId=${userId}`),
       ]);
 
@@ -40,6 +40,10 @@ export default function ResultsScreen({ userId }: ResultsScreenProps) {
     try {
       const response = await fetch('/api/auction/report', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ auctionId: results?.auction?.id }),
       });
       
       const blob = await response.blob();
@@ -76,21 +80,21 @@ export default function ResultsScreen({ userId }: ResultsScreenProps) {
           <div>
             <p className="text-sm text-black mb-1">Clearing Price</p>
             <p className="text-3xl font-bold text-blue-900">
-              ₹{results?.clearingPrice?.toFixed(2) || '0.00'}
+              ₹{results?.summary?.clearingPrice?.toFixed(2) || '0.00'}
             </p>
           </div>
           
           <div>
             <p className="text-sm text-black mb-1">Clearing Quantity</p>
             <p className="text-3xl font-bold text-blue-900">
-              {results?.clearingQuantity?.toFixed(2) || '0'} units
+              {results?.summary?.clearingQuantityMt?.toFixed(2) || '0'} units
             </p>
           </div>
           
           <div>
             <p className="text-sm text-black mb-1">Total Trade Value</p>
             <p className="text-3xl font-bold text-green-700">
-              ₹{results?.totalTradeValue?.toFixed(2) || '0.00'}
+              ₹{results?.summary?.totalTradeValue?.toFixed(2) || '0.00'}
             </p>
           </div>
         </div>
@@ -160,16 +164,16 @@ export default function ResultsScreen({ userId }: ResultsScreenProps) {
                     {alloc.sellerName}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-black">
-                    {alloc.quantity.toFixed(2)} units
+                    {alloc.allocatedQuantityMt?.toFixed(2) || '0.00'} units
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-black">
-                    ₹{alloc.reservePrice.toFixed(2)}
+                    ₹{alloc.sellerOfferPrice?.toFixed(2) || '0.00'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap font-semibold text-black">
-                    ₹{alloc.clearingPrice.toFixed(2)}
+                    ₹{alloc.finalPricePerKg?.toFixed(2) || '0.00'}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-green-700 font-semibold">
-                    ₹{alloc.tradeValue.toFixed(2)}
+                    ₹{alloc.tradeValue?.toFixed(2) || '0.00'}
                   </td>
                 </tr>
               ))}

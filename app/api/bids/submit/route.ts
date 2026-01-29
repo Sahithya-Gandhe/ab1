@@ -5,8 +5,6 @@ export const dynamic = 'force-dynamic';
 
 interface BidInput {
   distanceSlabId?: string;
-  distanceSlabMin?: number;
-  distanceSlabMax?: number;
   price: number;
   quantity: number;
 }
@@ -78,15 +76,21 @@ export async function POST(request: NextRequest) {
     if (bids && Array.isArray(bids)) {
       bidsToCreate = bids
         .filter((bid: BidInput) => bid.price && bid.quantity && bid.quantity > 0)
-        .map((bid: BidInput) => ({
-          auctionId: auction.id,
-          buyerId: buyer.id,
-          bidPricePerKg: bid.price,
-          bidQuantityMt: bid.quantity,
-          distanceSlabId: bid.distanceSlabId || null,
-          distanceSlabMin: bid.distanceSlabMin ?? null,
-          distanceSlabMax: bid.distanceSlabMax ?? null,
-        }));
+        .map((bid: BidInput) => {
+          const bidData: any = {
+            auctionId: auction.id,
+            buyerId: buyer.id,
+            bidPricePerKg: bid.price,
+            bidQuantityMt: bid.quantity,
+          };
+          
+          // Only include distanceSlabId if it's provided and not null
+          if (bid.distanceSlabId) {
+            bidData.distanceSlabId = bid.distanceSlabId;
+          }
+          
+          return bidData;
+        });
     }
     // Handle legacy format (price1/quantity1, price2/quantity2, price3/quantity3)
     else if (price1 && quantity1) {
@@ -137,8 +141,6 @@ export async function POST(request: NextRequest) {
         price: Number(bid.bidPricePerKg),
         quantity: Number(bid.bidQuantityMt),
         distanceSlabId: bid.distanceSlabId,
-        distanceSlabMin: bid.distanceSlabMin ? Number(bid.distanceSlabMin) : null,
-        distanceSlabMax: bid.distanceSlabMax ? Number(bid.distanceSlabMax) : null,
       })),
     });
   } catch (error) {

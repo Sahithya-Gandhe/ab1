@@ -46,7 +46,7 @@ export async function GET() {
         name: seller.sellerName,
         sellerName: seller.sellerName,
         location: seller.location,
-        distanceKm: Number(seller.distanceKm || 0),
+        distanceKm: 0, // Distance is buyer-relative, calculated per buyer
         quantity: totalQuantity,
         totalQuantity: totalQuantity,
         offerQuantityMt: totalQuantity,

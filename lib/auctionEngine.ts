@@ -134,7 +134,8 @@ export interface ClearingResult {
   unsoldSupplyMt: number;
   unsoldDemandMt: number;
   supplyPoints: SupplyPoint[];
-  demandPoints: DemandPoint[];
+  demandPoints: DemandPoint[]; // Buyer-level bids for allocation
+  marketDemand: MarketDemandPoint[]; // Price-aggregated demand for clearing
   gapPoints: GapPoint[];
   allocations: AllocationResult[];
   eligibleBuyerCount: number;
@@ -354,12 +355,68 @@ export function buildSupplyCurve(sellerBids: SellerBidData[]): SupplyPoint[] {
 }
 
 // =============================================================================
-// STEP 2: BUILD DEMAND CURVE
+// STEP 2: BUILD MARKET DEMAND CURVE (EXCEL-EXACT)
 // =============================================================================
 /**
- * Build demand curve from buyer bids.
- * SORTING: Price DESC (highest first), then quantity DESC (tie-breaker)
- * CUMULATIVE: Bottom → Top (calculated AFTER sorting)
+ * Build MARKET-LEVEL demand curve from buyer bids.
+ * 
+ * CRITICAL EXCEL LOGIC:
+ * 1. AGGREGATE all buyer bids by price (sum quantities at each price point)
+ * 2. SORT by price DESC
+ * 3. Calculate cumulative demand BOTTOM → TOP on aggregated totals
+ * 
+ * This matches Excel's demand table exactly where:
+ * - Each row is a price point
+ * - Total demand is sum of all buyers at that price
+ * - Cumulative demand is calculated bottom-up on aggregated demand
+ */
+export interface MarketDemandPoint {
+  pricePerKg: number;
+  totalDemandMt: number;
+  cumulativeDemandMt: number;
+}
+
+export function buildMarketDemandCurve(buyerBids: BuyerBidData[]): MarketDemandPoint[] {
+  if (!buyerBids || buyerBids.length === 0) {
+    return [];
+  }
+
+  // Step 1: AGGREGATE demand by price (sum all buyer quantities at each price)
+  const demandByPrice = new Map<number, number>();
+  
+  for (const bid of buyerBids) {
+    const priceKey = Math.round(bid.bidPricePerKg * DECIMAL_SCALE);
+    const existing = demandByPrice.get(priceKey) || 0;
+    const qtyScaled = Math.round(bid.bidQuantityMt * DECIMAL_SCALE);
+    demandByPrice.set(priceKey, existing + qtyScaled);
+  }
+
+  // Step 2: Convert to array and SORT by price DESC
+  const aggregatedDemand = Array.from(demandByPrice.entries())
+    .map(([priceScaled, qtyScaled]) => ({
+      pricePerKg: priceScaled / DECIMAL_SCALE,
+      totalDemandMt: qtyScaled / DECIMAL_SCALE,
+      cumulativeDemandMt: 0, // Will be calculated
+    }))
+    .sort((a, b) => {
+      const priceDiff = Math.round((b.pricePerKg - a.pricePerKg) * DECIMAL_SCALE);
+      return priceDiff;
+    });
+
+  // Step 3: Calculate cumulative demand BOTTOM → TOP
+  let cumulativeDemandScaled = 0;
+  for (let i = aggregatedDemand.length - 1; i >= 0; i--) {
+    const qtyScaled = Math.round(aggregatedDemand[i].totalDemandMt * DECIMAL_SCALE);
+    cumulativeDemandScaled += qtyScaled;
+    aggregatedDemand[i].cumulativeDemandMt = cumulativeDemandScaled / DECIMAL_SCALE;
+  }
+
+  return aggregatedDemand;
+}
+
+/**
+ * Build BUYER-LEVEL demand points (used for allocation ONLY, not clearing)
+ * This preserves individual buyer bid information for allocation after market clears
  */
 export function buildDemandCurve(buyerBids: BuyerBidData[]): DemandPoint[] {
   if (!buyerBids || buyerBids.length === 0) {
@@ -376,7 +433,7 @@ export function buildDemandCurve(buyerBids: BuyerBidData[]): DemandPoint[] {
     return qtyDiff;
   });
 
-  // First pass: create demand points without cumulative
+  // Create demand points - these are for ALLOCATION ONLY
   const demandPoints: DemandPoint[] = sortedBids.map((bid, i) => ({
     index: i,
     bidId: bid.id,
@@ -384,48 +441,39 @@ export function buildDemandCurve(buyerBids: BuyerBidData[]): DemandPoint[] {
     buyerName: bid.buyerName,
     bidPrice: bid.bidPricePerKg,
     quantity: bid.bidQuantityMt,
-    cumulativeDemand: 0, // Will be calculated
+    cumulativeDemand: 0, // Not used for clearing
   }));
-
-  // Calculate cumulative demand: Bottom → Top
-  // Start from the last row and accumulate upward
-  let cumulativeDemandScaled = 0;
-  for (let i = demandPoints.length - 1; i >= 0; i--) {
-    const qtyScaled = Math.round(demandPoints[i].quantity * DECIMAL_SCALE);
-    cumulativeDemandScaled += qtyScaled;
-    demandPoints[i].cumulativeDemand = cumulativeDemandScaled / DECIMAL_SCALE;
-  }
 
   return demandPoints;
 }
 
 // =============================================================================
-// STEP 3: MAP DEMAND TO SUPPLY PRICE GRID
+// STEP 3: MAP MARKET DEMAND TO SUPPLY PRICE GRID
 // =============================================================================
 /**
- * EXCEL CRITICAL: Map demand onto seller price/supply grid.
- * At each supply point price P, find total demand from buyers willing to pay >= P
+ * EXCEL CRITICAL: Map market demand onto seller price/supply grid.
+ * At each supply point price P, find total demand from market willing to pay >= P
+ * Uses MARKET-LEVEL aggregated demand (not individual buyers)
  */
-export function mapDemandToSupplyGrid(
+export function mapMarketDemandToSupplyGrid(
   supplyPoints: SupplyPoint[],
-  demandPoints: DemandPoint[]
+  marketDemand: MarketDemandPoint[]
 ): number[] {
-  if (supplyPoints.length === 0 || demandPoints.length === 0) {
+  if (supplyPoints.length === 0 || marketDemand.length === 0) {
     return supplyPoints.map(() => 0);
   }
 
   return supplyPoints.map((sp) => {
-    let demandScaled = 0;
-
-    // Sum ALL buyer quantities where bid price >= seller's offer price
-    // This is the EXCEL SUMIF logic
-    for (const dp of demandPoints) {
-      if (dp.bidPrice >= sp.offerPrice) {
-        demandScaled += Math.round(dp.quantity * DECIMAL_SCALE);
+    // At this supply price, find the highest market demand point where price >= supply price
+    // This gives us the cumulative demand at this price level
+    for (const md of marketDemand) {
+      if (md.pricePerKg >= sp.offerPrice) {
+        // Found the demand at or above this supply price
+        return md.cumulativeDemandMt;
       }
     }
-
-    return demandScaled / DECIMAL_SCALE;
+    // If no market demand meets this price, demand is 0
+    return 0;
   });
 }
 
@@ -714,8 +762,14 @@ export function checkReauctionCondition(
 // MAIN AUCTION EXECUTION (NEW SCHEMA)
 // =============================================================================
 /**
- * Execute the complete second-price double auction.
- * This is the main entry point that orchestrates all steps.
+ * Execute the complete second-price double auction with EXCEL-EXACT logic.
+ * 
+ * CRITICAL TWO-LAYER APPROACH:
+ * - Layer 1 (Market Demand): Price-aggregated demand for clearing
+ * - Layer 2 (Buyer Bids): Individual bids for allocation
+ * 
+ * This matches Excel's logic where cumulative demand is calculated from
+ * aggregated demand at each price point, NOT from individual buyer rows.
  */
 export function executeDoubleAuction(
   sellerBids: SellerBidData[],
@@ -731,19 +785,22 @@ export function executeDoubleAuction(
   // STEP 1: Build supply curve
   const supplyPoints = buildSupplyCurve(sellerBids);
 
-  // STEP 2: Build demand curve
+  // STEP 2A: Build MARKET demand curve (aggregated by price) for CLEARING
+  const marketDemand = buildMarketDemandCurve(buyerBids);
+
+  // STEP 2B: Build BUYER-LEVEL demand points for ALLOCATION (after clearing)
   const demandPoints = buildDemandCurve(buyerBids);
 
   // Calculate totals
   const totalSupply = supplyPoints.length > 0
     ? supplyPoints[supplyPoints.length - 1].cumulativeSupply
     : 0;
-  const totalDemand = demandPoints.length > 0
-    ? demandPoints[0].cumulativeDemand // First point has total (calculated bottom-up)
+  const totalDemand = marketDemand.length > 0
+    ? marketDemand[0].cumulativeDemandMt // First point has total (calculated bottom-up)
     : 0;
 
   // EARLY EXIT: No data
-  if (supplyPoints.length === 0 || demandPoints.length === 0) {
+  if (supplyPoints.length === 0 || marketDemand.length === 0) {
     return {
       clearingPrice: 0,
       clearingQuantityMt: 0,
@@ -755,6 +812,7 @@ export function executeDoubleAuction(
       unsoldDemandMt: totalDemand,
       supplyPoints: [],
       demandPoints: [],
+      marketDemand: [],
       gapPoints: [],
       allocations: [],
       eligibleBuyerCount: 0,
@@ -764,13 +822,14 @@ export function executeDoubleAuction(
     };
   }
 
-  // STEP 3: Map demand to supply price grid
-  const demandAtSupplyPrices = mapDemandToSupplyGrid(supplyPoints, demandPoints);
+  // STEP 3: Map MARKET demand to supply price grid (not individual buyers)
+  const demandAtSupplyPrices = mapMarketDemandToSupplyGrid(supplyPoints, marketDemand);
 
-  // STEP 4: Calculate gap at each price point
+  // STEP 4: Calculate gap at each price point (using market demand)
   const gapPoints = calculateGap(supplyPoints, demandAtSupplyPrices);
 
   // STEP 5: Find clearing price (second-price mechanism)
+  // Still uses demandPoints for second-price calculation (individual buyer bids)
   const { clearingPrice, clearingQuantity, clearingType } = calculateClearingPrice(
     gapPoints,
     demandPoints,
@@ -791,6 +850,7 @@ export function executeDoubleAuction(
       unsoldDemandMt: totalDemand,
       supplyPoints,
       demandPoints,
+      marketDemand,
       gapPoints,
       allocations: [],
       eligibleBuyerCount: 0,
@@ -832,6 +892,7 @@ export function executeDoubleAuction(
     unsoldDemandMt: Math.round(unsoldDemand * DECIMAL_SCALE) / DECIMAL_SCALE,
     supplyPoints,
     demandPoints,
+    marketDemand,
     gapPoints,
     allocations,
     eligibleBuyerCount: eligibleBuyerIds.size,

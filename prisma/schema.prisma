@@ -51,9 +51,9 @@ model Auction {
   buyerBids          BuyerBid[]
   sellerBids         SellerBid[]
   allocations        Allocation[]
-  auctionResults     AuctionResult[]
   supplySnapshots    AuctionSupplySnapshot[]
-  demandSnapshots    AuctionDemandSnapshot[]
+  marketDemand       MarketDemand[]
+  buyerSellerDistances BuyerSellerDistance[]
   gapSnapshots       AuctionGapSnapshot[]
   
   @@map("auctions")
@@ -80,10 +80,15 @@ model Buyer {
   email        String   @unique
   password     String
   createdAt    DateTime @default(now())
+  latitude     Decimal? @db.Decimal(9, 6)
+  longitude    Decimal? @db.Decimal(9, 6)
+  userId       String?  @unique
+  user         User?    @relation(fields: [userId], references: [id])
   
   // Relations
   bids         BuyerBid[]
   allocations  Allocation[]
+  buyerSellerDistances BuyerSellerDistance[]
   
   @@map("buyers")
 }
@@ -95,7 +100,11 @@ model Seller {
   id               String   @id @default(cuid())
   sellerName       String
   location         String?
-  distanceKm       Decimal? @db.Decimal(10, 2)
+  // Coordinates for distance calculation (buyer-relative)
+  latitude         Decimal? @db.Decimal(9, 6)
+  longitude        Decimal? @db.Decimal(9, 6)
+  userId           String?  @unique
+  user             User?    @relation(fields: [userId], references: [id])
   
   // Default offer values (used when creating auction)
   basePricePerKg   Decimal? @db.Decimal(10, 4)  // Base offer price
@@ -106,6 +115,7 @@ model Seller {
   // Relations
   bids         SellerBid[]
   allocations  Allocation[]
+  buyerSellerDistances BuyerSellerDistance[]
   
   @@map("sellers")
 }
@@ -127,10 +137,9 @@ model BuyerBid {
   buyerId             String
   buyer               Buyer    @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   
-  // Distance slab info - which slab this bid applies to
+  // Distance slab info - reference to DistanceSlab (single source of truth)
   distanceSlabId      String?  // Reference to which distance slab
-  distanceSlabMin     Decimal? @db.Decimal(10, 2) // e.g., 0 km
-  distanceSlabMax     Decimal? @db.Decimal(10, 2) // e.g., 100 km
+  distanceSlab        DistanceSlab? @relation(fields: [distanceSlabId], references: [id])
   
   bidPricePerKg       Decimal  @db.Decimal(10, 4)
   bidQuantityMt       Decimal  @db.Decimal(12, 4)
@@ -142,7 +151,8 @@ model BuyerBid {
   @@index([auctionId])
   @@index([buyerId])
   @@index([auctionId, bidPricePerKg(sort: Desc)])
-  @@index([auctionId, distanceSlabMin])
+  @@index([auctionId, distanceSlabId])
+  @@unique([auctionId, buyerId, bidPricePerKg, distanceSlabId])
   @@map("buyer_bids")
 }
 
@@ -164,9 +174,8 @@ model SellerBid {
   
   offerPricePerKg     Decimal  @db.Decimal(10, 4)
   offerQuantityMt     Decimal  @db.Decimal(12, 4)
-  distanceKm          Decimal? @db.Decimal(10, 2)
-  deliveryCostPerKg   Decimal? @db.Decimal(10, 4)
-  landedCostPerKg     Decimal? @db.Decimal(10, 4) // offer_price + delivery_cost
+  // Distance/delivery/landed cost are buyer-relative and computed at allocation time
+  // They MUST NOT be stored on SellerBid to preserve price-only clearing
   cumulativeSupplyMt  Decimal? @db.Decimal(12, 4) // Calculated during clearing
   
   createdAt           DateTime @default(now())
@@ -175,7 +184,33 @@ model SellerBid {
   @@index([auctionId])
   @@index([sellerId])
   @@index([auctionId, offerPricePerKg(sort: Asc)])
+  @@unique([auctionId, sellerId, offerPricePerKg])
   @@map("seller_bids")
+}
+
+// =============================================================================
+// BuyerSellerDistance - Derived & cached buyer<->seller distances per auction
+// This is computed once per auction and used during allocation and UI display
+// =============================================================================
+model BuyerSellerDistance {
+  id            String   @id @default(cuid())
+  auctionId     String
+  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  buyerId       String
+  buyer         Buyer    @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  distanceKm    Decimal  @db.Decimal(10, 2)
+  slabId        String
+  slab          DistanceSlab @relation(fields: [slabId], references: [id])
+  costPerKg     Decimal  @db.Decimal(10, 4)
+
+  createdAt     DateTime @default(now())
+
+  @@unique([auctionId, buyerId, sellerId])
+  @@index([auctionId])
+  @@map("buyer_seller_distances")
 }
 
 // =============================================================================
@@ -187,6 +222,8 @@ model DistanceSlab {
   maxKm       Decimal  @db.Decimal(10, 2)
   costPerKg   Decimal  @db.Decimal(10, 4)
   createdAt   DateTime @default(now())
+  buyerBids    BuyerBid[]
+  buyerSellerDistances BuyerSellerDistance[]
   
   @@map("distance_slabs")
 }
@@ -223,36 +260,23 @@ model Allocation {
 }
 
 // =============================================================================
-// 8️⃣ AUCTION_RESULTS - Immutable result snapshot for audit/PDF
+// 8️⃣ MARKET_DEMAND - Price-aggregated demand curve for Excel-exact clearing
 // =============================================================================
-model AuctionResult {
+// This is THE demand table used for cumulative demand and clearing.
+// Aggregates all buyer bids at each price point (total demand across buyers).
+// Cumulative demand calculated BOTTOM → TOP on this table.
+// Individual BuyerBid table is used ONLY for allocation after clearing.
+model MarketDemand {
   id                  String   @id @default(cuid())
   auctionId           String
   auction             Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
   
-  clearingPrice       Decimal  @db.Decimal(12, 4)
-  clearingQuantityMt  Decimal  @db.Decimal(12, 4)
-  tradeValue          Decimal  @db.Decimal(18, 4)
-  clearingType        String   // EXACT | INTERPOLATED | NO_CLEARING
+  pricePerKg          Decimal  @db.Decimal(10, 4)
+  totalDemandMt       Decimal  @db.Decimal(12, 4) // Sum of all buyer quantities at this price
+  cumulativeDemandMt  Decimal? @db.Decimal(12, 4) // Calculated bottom → top
   
-  // Full result snapshot
-  resultJson          Json
-  pdfUrl              String?
-  
-  // Supply/Demand metrics
-  totalSupplyMt       Decimal? @db.Decimal(12, 4)
-  totalDemandMt       Decimal? @db.Decimal(12, 4)
-  unsoldSupplyMt      Decimal? @db.Decimal(12, 4)
-  unsoldDemandMt      Decimal? @db.Decimal(12, 4)
-  
-  // Participation metrics
-  participatingBuyers Int?
-  participatingSellers Int?
-  
-  generatedAt         DateTime @default(now())
-  
-  @@index([auctionId])
-  @@map("auction_results")
+  @@index([auctionId, pricePerKg(sort: Desc)])
+  @@map("market_demand")
 }
 
 // =============================================================================
@@ -276,20 +300,8 @@ model AuctionSupplySnapshot {
   @@map("auction_supply_snapshots")
 }
 
-model AuctionDemandSnapshot {
-  id                String   @id @default(cuid())
-  auctionId         String
-  auction           Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
-  
-  buyerId           String
-  buyerName         String
-  price             Decimal  @db.Decimal(10, 4)
-  quantity          Decimal  @db.Decimal(12, 4)
-  cumulativeDemand  Decimal  @db.Decimal(12, 4)
-  
-  @@index([auctionId])
-  @@map("auction_demand_snapshots")
-}
+// AuctionDemandSnapshot removed - replaced by MarketDemand table
+// Individual buyer bid details are in BuyerBid table (used for allocation only)
 
 model AuctionGapSnapshot {
   id                String   @id @default(cuid())
@@ -316,6 +328,8 @@ model User {
   name      String
   role      UserRole @default(BUYER)
   createdAt DateTime @default(now())
+  buyer     Buyer?
+  seller    Seller?
   
   @@map("users")
 }

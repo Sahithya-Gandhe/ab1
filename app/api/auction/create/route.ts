@@ -3,17 +3,6 @@ import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
-// Get delivery cost based on distance
-async function getDeliveryCost(distanceKm: number): Promise<number> {
-  const slab = await (prisma as any).distanceSlab.findFirst({
-    where: {
-      minKm: { lte: distanceKm },
-      maxKm: { gt: distanceKm },
-    },
-  });
-  return slab ? Number(slab.costPerKg) : 2.00; // Default to highest slab
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -52,24 +41,19 @@ export async function POST(request: NextRequest) {
 
     // Create seller bids using each seller's stored price and quantity
     for (const seller of sellers) {
-      const distanceKm = Number(seller.distanceKm) || 100;
-      const deliveryCost = await getDeliveryCost(distanceKm);
-      
       // Use seller's stored base price (default to ₹20 if not set)
       const basePrice = Number(seller.basePricePerKg) || 20.00;
       // Use seller's stored quantity (default to 300 MT if not set)
       const totalQty = Number(seller.offerQuantityMt) || 300;
       
       // Create single bid per seller with their full quantity at their price
+      // Note: Distance/delivery/landed costs are buyer-relative and calculated during allocation
       await (prisma as any).sellerBid.create({
         data: {
           sellerId: seller.id,
           auctionId: auction.id,
           offerPricePerKg: basePrice,
           offerQuantityMt: totalQty,
-          distanceKm: distanceKm,
-          deliveryCostPerKg: deliveryCost,
-          landedCostPerKg: basePrice + deliveryCost,
         },
       });
     }

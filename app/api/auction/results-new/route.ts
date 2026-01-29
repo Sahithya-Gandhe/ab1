@@ -53,11 +53,9 @@ interface SupplySnapshotRecord {
 
 interface DemandSnapshotRecord {
   id: string;
-  buyerId: string;
-  buyerName: string;
-  price: any;
-  quantity: any;
-  cumulativeDemand: any;
+  pricePerKg: any;
+  totalDemandMt: any;
+  cumulativeDemandMt: any;
 }
 
 interface GapSnapshotRecord {
@@ -115,16 +113,30 @@ export async function GET(request: NextRequest) {
       ],
     }) as AllocationRecord[];
 
+    // Fetch buyer-seller distances for landing cost calculation
+    const buyerSellerDistances = await (prisma as any).buyerSellerDistance.findMany({
+      where: { auctionId: auction.id },
+    });
+
+    // Create distance lookup map
+    const distanceMap = new Map();
+    buyerSellerDistances.forEach((d: any) => {
+      distanceMap.set(`${d.buyerId}_${d.sellerId}`, {
+        distanceKm: Number(d.distanceKm),
+        deliveryCost: Number(d.costPerKg),
+      });
+    });
+
     // Fetch supply snapshots
     const supplySnapshots = await (prisma as any).auctionSupplySnapshot.findMany({
       where: { auctionId: auction.id },
       orderBy: { cumulativeSupply: 'asc' },
     }) as SupplySnapshotRecord[];
 
-    // Fetch demand snapshots
-    const demandSnapshots = await (prisma as any).auctionDemandSnapshot.findMany({
+    // Fetch market demand (price-aggregated demand curve used for clearing)
+    const demandSnapshots = await (prisma as any).marketDemand.findMany({
       where: { auctionId: auction.id },
-      orderBy: { price: 'desc' },
+      orderBy: { pricePerKg: 'desc' },
     }) as DemandSnapshotRecord[];
 
     // Fetch gap snapshots
@@ -132,12 +144,6 @@ export async function GET(request: NextRequest) {
       where: { auctionId: auction.id },
       orderBy: { rowIndex: 'asc' },
     }) as GapSnapshotRecord[];
-
-    // Fetch auction result record
-    const auctionResult = await (prisma as any).auctionResult.findFirst({
-      where: { auctionId: auction.id },
-      orderBy: { generatedAt: 'desc' },
-    });
 
     // Group allocations by buyer
     const buyerAllocations = new Map<string, {
@@ -165,12 +171,19 @@ export async function GET(request: NextRequest) {
       buyer.totalQuantity += Number(alloc.allocatedQuantityMt);
       buyer.totalValue += Number(alloc.tradeValue || 0);
       buyer.totalSavings += Number(alloc.buyerSavings || 0);
+      
+      const distance = distanceMap.get(`${alloc.buyerId}_${alloc.sellerId}`) || { distanceKm: 0, deliveryCost: 0 };
+      const landedCost = Number(alloc.finalPricePerKg) + distance.deliveryCost;
+      
       buyer.allocations.push({
         sellerId: alloc.sellerId,
         sellerName: alloc.seller.sellerName,
         quantity: Number(alloc.allocatedQuantityMt),
         price: Number(alloc.finalPricePerKg),
         bidPrice: Number(alloc.buyerBidPrice),
+        distanceKm: distance.distanceKm,
+        deliveryCost: distance.deliveryCost,
+        landedCost: landedCost,
         savings: Number(alloc.buyerSavings || 0),
       });
     }
@@ -242,26 +255,34 @@ export async function GET(request: NextRequest) {
         unsoldSupplyPercent: auction.totalSupplyMt && Number(auction.totalSupplyMt) > 0
           ? (Number(auction.unsoldSupplyMt || 0) / Number(auction.totalSupplyMt)) * 100
           : 0,
-        participatingBuyers: auctionResult?.participatingBuyers || buyerAllocations.size,
-        participatingSellers: auctionResult?.participatingSellers || sellerAllocations.size,
+        participatingBuyers: buyerAllocations.size,
+        participatingSellers: sellerAllocations.size,
         clearingType: auction.clearingType,
       },
 
-      allocations: allocations.map(alloc => ({
-        id: alloc.id,
-        buyerId: alloc.buyerId,
-        buyerName: alloc.buyer.buyerName,
-        sellerId: alloc.sellerId,
-        sellerName: alloc.seller.sellerName,
-        allocatedQuantityMt: Number(alloc.allocatedQuantityMt),
-        finalPricePerKg: Number(alloc.finalPricePerKg),
-        buyerBidPrice: Number(alloc.buyerBidPrice || 0),
-        sellerOfferPrice: Number(alloc.sellerOfferPrice || 0),
-        sellerLandedCost: Number(alloc.sellerLandedCost || 0),
-        tradeValue: Number(alloc.tradeValue || 0),
-        buyerSavings: Number(alloc.buyerSavings || 0),
-        sellerBonus: Number(alloc.sellerBonus || 0),
-      })),
+      allocations: allocations.map(alloc => {
+        const distance = distanceMap.get(`${alloc.buyerId}_${alloc.sellerId}`) || { distanceKm: 0, deliveryCost: 0 };
+        const landedCost = Number(alloc.finalPricePerKg) + distance.deliveryCost;
+        
+        return {
+          id: alloc.id,
+          buyerId: alloc.buyerId,
+          buyerName: alloc.buyer.buyerName,
+          sellerId: alloc.sellerId,
+          sellerName: alloc.seller.sellerName,
+          allocatedQuantityMt: Number(alloc.allocatedQuantityMt),
+          finalPricePerKg: Number(alloc.finalPricePerKg),
+          buyerBidPrice: Number(alloc.buyerBidPrice || 0),
+          sellerOfferPrice: Number(alloc.sellerOfferPrice || 0),
+          sellerLandedCost: Number(alloc.sellerLandedCost || 0),
+          distanceKm: distance.distanceKm,
+          deliveryCostPerKg: distance.deliveryCost,
+          landedCostPerKg: landedCost,
+          tradeValue: Number(alloc.tradeValue || 0),
+          buyerSavings: Number(alloc.buyerSavings || 0),
+          sellerBonus: Number(alloc.sellerBonus || 0),
+        };
+      }),
 
       buyerAllocations: Array.from(buyerAllocations.values()),
       sellerAllocations: Array.from(sellerAllocations.values()),
@@ -277,11 +298,9 @@ export async function GET(request: NextRequest) {
       })),
 
       demandPoints: demandSnapshots.map(dp => ({
-        buyerId: dp.buyerId,
-        buyerName: dp.buyerName,
-        price: Number(dp.price),
-        quantity: Number(dp.quantity),
-        cumulativeDemand: Number(dp.cumulativeDemand),
+        pricePerKg: Number(dp.pricePerKg),
+        totalDemandMt: Number(dp.totalDemandMt),
+        cumulativeDemandMt: Number(dp.cumulativeDemandMt),
       })),
 
       gapPoints: gapSnapshots.map(gp => ({
@@ -292,11 +311,6 @@ export async function GET(request: NextRequest) {
         gap: Number(gp.gap),
       })),
 
-      auditTrail: auctionResult ? {
-        resultId: auctionResult.id,
-        generatedAt: auctionResult.generatedAt,
-        pdfUrl: auctionResult.pdfUrl,
-      } : null,
     });
   } catch (error) {
     console.error('Error fetching auction results:', error);

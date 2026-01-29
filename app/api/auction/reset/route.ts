@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     await db.auctionSupplySnapshot.deleteMany({
       where: { auctionId: auction.id },
     });
-    await db.auctionDemandSnapshot.deleteMany({
+    await db.marketDemand.deleteMany({
       where: { auctionId: auction.id },
     });
     await db.auctionGapSnapshot.deleteMany({

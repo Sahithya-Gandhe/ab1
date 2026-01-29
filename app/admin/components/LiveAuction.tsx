@@ -73,7 +73,7 @@ export default function LiveAuction({ onStatusChange }: LiveAuctionProps) {
     if (!confirmed) return;
 
     try {
-      const response = await fetch('/api/auction/end', {
+      const response = await fetch('/api/auction/end-new', {
         method: 'POST',
       });
 
